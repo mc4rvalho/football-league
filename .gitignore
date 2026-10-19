@@ -1,0 +1,50 @@
+# Dependências (Monorepo e Subpastas)
+node_modules/
+/node_modules/
+
+# Compilações e Builds
+dist/
+/dist/
+build/
+/build/
+*.tsbuildinfo
+
+# Variáveis de Ambiente e Segredos (NUNCA sobem)
+.env
+.env.*
+!.env.example
+backend/.env
+frontend/.env
+
+# Logs
+logs
+*.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+
+# Arquivos do Sistema Operacional (macOS e Windows)
+.DS_Store
+.DS_Store?
+._*
+.Spotlight-V100
+.Trashes
+Thumbs.db
+ehthumbs.db
+
+# Editores de Código (VS Code / WebStorm)
+.vscode/*
+!.vscode/settings.json
+!.vscode/tasks.json
+!.vscode/launch.json
+!.vscode/extensions.json
+.idea/
+
+# Arquivos de Testes e Cobertura
+coverage/
+.nyc_output/
+
+# Cache de Linters e Ferramentas
+.eslintcache
+.prettiercache
+.npm
