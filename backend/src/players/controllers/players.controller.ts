@@ -18,6 +18,7 @@ import { CreatePlayerDto } from '../dto/create-player.dto';
 import { UpdatePlayerDto } from '../dto/update-player.dto';
 import { UpdateConditionDto } from '../dto/update-condition.dto';
 import { PlayersService } from '../services/players.service';
+import { BuyPlayerDto } from '../dto/buy-player.dto';
 
 @Controller('players')
 export class PlayersController {
@@ -32,6 +33,21 @@ export class PlayersController {
     const player = await this.playersService.create(createPlayerDto);
     res.setHeader('Location', `/api/v1/players/${player.id}`);
     return player;
+  }
+
+  @Post(':id/buy')
+  @HttpCode(HttpStatus.OK)
+  async buyPlayer(
+    @Param('id', ParseIntPipe) id: number,
+    @Body() buyPlayerDto: BuyPlayerDto,
+  ) {
+    return await this.playersService.buyPlayer(id, buyPlayerDto);
+  }
+
+  @Post(':id/sell')
+  @HttpCode(HttpStatus.OK)
+  async sellPlayer(@Param('id', ParseIntPipe) id: number) {
+    return await this.playersService.sellPlayer(id);
   }
 
   @Get()

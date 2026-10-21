@@ -8,6 +8,7 @@ import { CreatePlayerDto } from '../dto/create-player.dto';
 import { UpdatePlayerDto } from '../dto/update-player.dto';
 import { UpdateConditionDto } from '../dto/update-condition.dto';
 import { PrismaService } from '../../prisma/prisma.service';
+import { BuyPlayerDto } from '../dto/buy-player.dto';
 
 type PositionType = 'GOL' | 'ZAG' | 'LAT' | 'MEI' | 'ATA';
 
@@ -178,6 +179,182 @@ export class PlayersService {
       overall,
       club_id: player.clube_id,
     };
+  }
+
+  // ---------------------------------------------------------------------------
+  // MÉTODOS DE CALCULO (BUYER)
+  // ---------------------------------------------------------------------------
+
+  async buyPlayer(playerId: number, buyPlayerDto: BuyPlayerDto) {
+    const { buyer_club_id } = buyPlayerDto;
+
+    // 1. Validar se o jogador existe
+    const player = await this.prisma.jogador.findFirst({
+      where: { id: playerId, excluido_em: null },
+    });
+
+    if (!player) {
+      throw new NotFoundException(`Jogador com ID ${playerId} não encontrado.`);
+    }
+
+    // 2. Validar se o jogador já pertence ao clube comprador
+    if (player.clube_id === buyer_club_id) {
+      throw new BadRequestException('O jogador já pertence a este clube.');
+    }
+
+    // 3. Validar se o clube comprador existe
+    const buyerClub = await this.prisma.clube.findUnique({
+      where: { id: buyer_club_id },
+    });
+
+    if (!buyerClub) {
+      throw new NotFoundException(
+        `Clube comprador com ID ${buyer_club_id} não encontrado.`,
+      );
+    }
+
+    // 4. Validar limite de elenco do comprador (máximo 25 jogadores)
+    const buyerSquadCount = await this.prisma.jogador.count({
+      where: { clube_id: buyer_club_id, excluido_em: null },
+    });
+
+    if (buyerSquadCount >= 25) {
+      throw new BadRequestException(
+        'O clube comprador já atingiu o limite máximo de 25 jogadores no elenco.',
+      );
+    }
+
+    // 5. Calcular valor de mercado atual do jogador
+    const baseValueNumber = Number(player.valor_base);
+    const transferValue = this.calculateMarketValue(
+      baseValueNumber,
+      player.condicao,
+    );
+
+    // 6. Validar saldo do clube comprador
+    const buyerBalance = Number(buyerClub.caixa);
+    if (buyerBalance < transferValue) {
+      throw new BadRequestException(
+        'Saldo em caixa insuficiente para realizar a compra.',
+      );
+    }
+
+    const sellerClubId = player.clube_id;
+
+    // ---------------------------------------------------------------------------
+    // TRANSAÇÃO ATÔMICA (PRISMA $TRANSACTION)
+    // ---------------------------------------------------------------------------
+    const updatedPlayer = await this.prisma.$transaction(async (tx) => {
+      // A. Debitar valor do caixa do clube comprador
+      await tx.clube.update({
+        where: { id: buyer_club_id },
+        data: {
+          caixa: { decrement: transferValue },
+        },
+      });
+
+      // B. Creditar valor no caixa do clube vendedor (se não for agente livre)
+      if (sellerClubId !== null) {
+        await tx.clube.update({
+          where: { id: sellerClubId },
+          data: {
+            caixa: { increment: transferValue },
+          },
+        });
+      }
+
+      // C. Transferir o vínculo do jogador para o clube comprador
+      const playerWithNewClub = await tx.jogador.update({
+        where: { id: playerId },
+        data: {
+          clube_id: buyer_club_id,
+        },
+      });
+
+      // D. Registrar histórico da transação
+      await tx.transacao.create({
+        data: {
+          clube_id: buyer_club_id,
+          jogador_id: playerId,
+          nome_jogador: player.nome,
+          tipo: 'COMPRA',
+          valor: transferValue,
+          taxa: 0,
+          multa: 0,
+          variacao_caixa: -transferValue,
+        },
+      });
+
+      return playerWithNewClub;
+    });
+
+    return this.mapToResponse(updatedPlayer);
+  }
+
+  async sellPlayer(playerId: number) {
+    // 1. Validar se o jogador existe
+    const player = await this.prisma.jogador.findFirst({
+      where: { id: playerId, excluido_em: null },
+    });
+
+    if (!player) {
+      throw new NotFoundException(`Jogador com ID ${playerId} não encontrado.`);
+    }
+
+    // 2. Validar se o jogador pertence a algum clube
+    if (player.clube_id === null) {
+      throw new BadRequestException(
+        'O jogador é um agente livre e não pertence a nenhum clube para ser vendido.',
+      );
+    }
+
+    const sellerClubId = player.clube_id;
+
+    // 3. Calcular valor de mercado atual
+    const baseValueNumber = Number(player.valor_base);
+    const marketValue = this.calculateMarketValue(
+      baseValueNumber,
+      player.condicao,
+    );
+
+    // ---------------------------------------------------------------------------
+    // TRANSAÇÃO ATÔMICA DA VENDA
+    // ---------------------------------------------------------------------------
+    const updatedPlayer = await this.prisma.$transaction(async (tx) => {
+      // Creditar o valor da venda no caixa do clube
+      await tx.clube.update({
+        where: { id: sellerClubId },
+        data: {
+          caixa: { increment: marketValue },
+        },
+      });
+
+      // Desvincular o jogador (vira agente livre)
+      const freedPlayer = await tx.jogador.update({
+        where: { id: playerId },
+        data: {
+          clube_id: null,
+        },
+      });
+
+      // Registrar o histórico financeiro da venda
+      await tx.transacao.create({
+        data: {
+          clube_id: sellerClubId,
+          jogador_id: playerId,
+          nome_jogador: player.nome,
+          tipo: 'VENDA',
+          valor: marketValue,
+          taxa: 0,
+          multa: 0,
+          variacao_caixa: marketValue, // Entrada de caixa (positivo)
+        },
+      });
+
+      return freedPlayer;
+    });
+
+    return this.mapToResponse(updatedPlayer);
   }
 
   // ---------------------------------------------------------------------------

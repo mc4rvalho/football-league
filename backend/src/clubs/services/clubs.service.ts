@@ -5,7 +5,7 @@ import {
 } from '@nestjs/common';
 import { CreateClubDto } from '../dto/create-club.dto';
 import { PrismaService } from '../../prisma/prisma.service';
-
+import { Prisma } from '../../generated/prisma/client';
 type PositionType = 'GOL' | 'ZAG' | 'LAT' | 'MEI' | 'ATA';
 
 @Injectable()
@@ -98,6 +98,116 @@ export class ClubsService {
       stats.physical * w.physical;
 
     return Math.round(weightedSum);
+  }
+
+  async getTransactions(
+    clubId: number,
+    query: { page?: number; limit?: number; type?: string },
+  ) {
+    // 1. Validar existência do clube
+    const club = await this.prisma.clube.findUnique({
+      where: { id: clubId },
+    });
+
+    if (!club) {
+      throw new NotFoundException(`Clube com ID ${clubId} não encontrado.`);
+    }
+
+    const page = Number(query.page) || 1;
+    const limit = Number(query.limit) || 10;
+    const skip = (page - 1) * limit;
+
+    const whereCondition: Prisma.TransacaoWhereInput = { clube_id: clubId };
+    if (query.type) {
+      whereCondition.tipo = query.type.toUpperCase();
+    }
+
+    // 2. Busca paginada de transações e totalizador
+    const [total, transactions, allClubTransactions] = await Promise.all([
+      this.prisma.transacao.count({ where: whereCondition }),
+      this.prisma.transacao.findMany({
+        where: whereCondition,
+        skip,
+        take: limit,
+        orderBy: { criado_em: 'desc' },
+      }),
+      this.prisma.transacao.findMany({
+        where: { clube_id: clubId },
+      }),
+    ]);
+
+    // 3. Cálculo do resumo financeiro (summary)
+    let total_entrances = 0;
+    let total_exits = 0;
+
+    allClubTransactions.forEach((t) => {
+      const val = Number(t.variacao_caixa);
+      if (val > 0) {
+        total_entrances += val;
+      } else {
+        total_exits += Math.abs(val);
+      }
+    });
+
+    const net_result = total_entrances - total_exits;
+
+    // 4. Mapeamento da listagem
+    const data = transactions.map((t) => ({
+      id: t.id,
+      club_id: t.clube_id,
+      player_id: t.jogador_id,
+      player_name: t.nome_jogador,
+      type: t.tipo,
+      amount: Number(t.valor),
+      cash_change: Number(t.variacao_caixa),
+      created_at: t.criado_em,
+    }));
+
+    return {
+      data,
+      summary: {
+        total_entrances: Number(total_entrances.toFixed(2)),
+        total_exits: Number(total_exits.toFixed(2)),
+        net_result: Number(net_result.toFixed(2)),
+      },
+      meta: {
+        total,
+        page,
+        limit,
+        total_pages: Math.ceil(total / limit),
+      },
+    };
+  }
+
+  async exportTransactionsCsv(clubId: number): Promise<string> {
+    const club = await this.prisma.clube.findUnique({
+      where: { id: clubId },
+    });
+
+    if (!club) {
+      throw new NotFoundException(`Clube com ID ${clubId} não encontrado.`);
+    }
+
+    const transactions = await this.prisma.transacao.findMany({
+      where: { clube_id: clubId },
+      orderBy: { criado_em: 'desc' },
+    });
+
+    const header = 'ID,Data,Tipo,Jogador,Valor,VariacaoCaixa\n';
+    const rows = transactions
+      .map((t) =>
+        [
+          t.id,
+          t.criado_em.toISOString(),
+          t.tipo,
+          `"${t.nome_jogador}"`,
+          Number(t.valor),
+          Number(t.variacao_caixa),
+        ].join(','),
+      )
+      .join('\n');
+
+    return header + rows;
   }
 
   // ---------------------------------------------------------------------------

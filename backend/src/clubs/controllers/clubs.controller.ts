@@ -38,4 +38,28 @@ export class ClubsController {
   async findOne(@Param('id', ParseIntPipe) id: number) {
     return await this.clubsService.findOne(id);
   }
+
+  @Get(':id/transactions')
+  async getTransactions(
+    @Param('id', ParseIntPipe) id: number,
+    @Query('page') page?: number,
+    @Query('limit') limit?: number,
+    @Query('type') type?: string,
+  ) {
+    return await this.clubsService.getTransactions(id, { page, limit, type });
+  }
+
+  @Get(':id/transactions/export')
+  async exportTransactions(
+    @Param('id', ParseIntPipe) id: number,
+    @Res() res: Response,
+  ) {
+    const csvData = await this.clubsService.exportTransactionsCsv(id);
+    res.setHeader('Content-Type', 'text/csv');
+    res.setHeader(
+      'Content-Disposition',
+      `attachment; filename=transacoes-clube-${id}.csv`,
+    );
+    return res.send(csvData);
+  }
 }
