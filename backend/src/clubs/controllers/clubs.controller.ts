@@ -7,12 +7,14 @@ import {
   Param,
   ParseIntPipe,
   Post,
+  Put,
   Query,
   Res,
 } from '@nestjs/common';
 import type { Response } from 'express';
 import { CreateClubDto } from '../dto/create-club.dto';
 import { ClubsService } from '../services/clubs.service';
+import { SetLineupDto } from '../dto/set-lineup.dto';
 
 @Controller('clubs')
 export class ClubsController {
@@ -61,5 +63,18 @@ export class ClubsController {
       `attachment; filename=transacoes-clube-${id}.csv`,
     );
     return res.send(csvData);
+  }
+
+  @Put(':id/lineup')
+  async setLineup(
+    @Param('id', ParseIntPipe) id: number,
+    @Body() setLineupDto: SetLineupDto,
+  ) {
+    return await this.clubsService.setLineup(id, setLineupDto);
+  }
+
+  @Get(':id/lineup')
+  async getLineup(@Param('id', ParseIntPipe) id: number) {
+    return await this.clubsService.getLineup(id);
   }
 }

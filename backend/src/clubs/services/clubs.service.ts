@@ -6,6 +6,7 @@ import {
 import { CreateClubDto } from '../dto/create-club.dto';
 import { PrismaService } from '../../prisma/prisma.service';
 import { Prisma } from '../../generated/prisma/client';
+import { SetLineupDto } from '../dto/set-lineup.dto';
 type PositionType = 'GOL' | 'ZAG' | 'LAT' | 'MEI' | 'ATA';
 
 @Injectable()
@@ -155,7 +156,7 @@ export class ClubsService {
     const data = transactions.map((t) => ({
       id: t.id,
       club_id: t.clube_id,
-      player_id: t.jogador_id,
+      player_ids: t.jogador_id,
       player_name: t.nome_jogador,
       type: t.tipo,
       amount: Number(t.valor),
@@ -208,6 +209,139 @@ export class ClubsService {
       .join('\n');
 
     return header + rows;
+  }
+
+  async setLineup(clubId: number, lineup: SetLineupDto) {
+    const club = await this.prisma.clube.findUnique({ where: { id: clubId } });
+    if (!club) {
+      throw new NotFoundException(`Clube com ID ${clubId} não encontrado.`);
+    }
+
+    const uniqueIds = new Set(lineup.player_ids);
+    if (uniqueIds.size !== 11) {
+      throw new BadRequestException(
+        'A escalação deve conter 11 jogadores distintos.',
+      );
+    }
+
+    const players = await this.prisma.jogador.findMany({
+      where: {
+        id: { in: lineup.player_ids },
+        clube_id: clubId,
+        excluido_em: null,
+      },
+    });
+
+    if (players.length !== 11) {
+      throw new BadRequestException(
+        'Todos os 11 jogadores devem pertencer ao seu clube.',
+      );
+    }
+
+    const unavailable = players.find(
+      (p) =>
+        p.condicao === 'LESIONADO' ||
+        p.condicao === 'SUSPENSO' ||
+        p.condicao === 'DOENTE',
+    );
+    if (unavailable) {
+      throw new BadRequestException(
+        `O jogador ${unavailable.nome} está indisponível para o jogo (Condição: ${unavailable.condicao}).`,
+      );
+    }
+
+    const golCount = players.filter((p) => p.posicao === 'GOL').length;
+    const defCount = players.filter(
+      (p) => p.posicao === 'ZAG' || p.posicao === 'LAT',
+    ).length;
+    const meiCount = players.filter((p) => p.posicao === 'MEI').length;
+    const ataCount = players.filter((p) => p.posicao === 'ATA').length;
+
+    if (golCount !== 1) {
+      throw new BadRequestException(
+        'A escalação deve conter exatamente 1 goleiro (GOL).',
+      );
+    }
+
+    const [expectedDef, expectedMei, expectedAta] = lineup.formation
+      .split('-')
+      .map(Number);
+
+    if (
+      defCount !== expectedDef ||
+      meiCount !== expectedMei ||
+      ataCount !== expectedAta
+    ) {
+      throw new BadRequestException(
+        `A escalação não atende à formação ${lineup.formation}. Esperado: ${expectedDef} defensores, ${expectedMei} meias e ${expectedAta} atacantes.`,
+      );
+    }
+
+    // Atualiza apenas a formação do clube no banco
+    await this.prisma.clube.update({
+      where: { id: clubId },
+      data: { formacao: lineup.formation },
+    });
+
+    return {
+      message: 'Escalação e formação salvas com sucesso!',
+      formation: lineup.formation,
+      starting_eleven: players.map((p) => ({
+        id: p.id,
+        name: p.nome,
+        position: p.posicao,
+      })),
+    };
+  }
+
+  async getLineup(clubId: number) {
+    const club = await this.prisma.clube.findUnique({ where: { id: clubId } });
+    if (!club) {
+      throw new NotFoundException(`Clube com ID ${clubId} não encontrado.`);
+    }
+
+    const starters = await this.prisma.jogador.findMany({
+      where: { clube_id: clubId, excluido_em: null },
+      orderBy: { id: 'asc' },
+      take: 11,
+    });
+
+    return {
+      club_id: club.id,
+      club_name: club.nome,
+      formation: club.formacao,
+      starters: starters.map((p) => {
+        const baseValue = Number(p.valor_base);
+        const position = p.posicao as PositionType;
+
+        return {
+          id: p.id,
+          name: p.nome,
+          position: p.posicao,
+          agility: p.agilidade,
+          age: p.idade,
+          condition: p.condicao,
+          base_value: baseValue,
+          market_value: this.calculateMarketValue(baseValue, p.condicao),
+          pace: p.velocidade,
+          shooting: p.finalizacao,
+          passing: p.passe,
+          dribbling: p.drible,
+          defending: p.defesa,
+          physical: p.fisico,
+          potential: p.potencial,
+          overall: this.calculateOverall(position, {
+            pace: p.velocidade,
+            shooting: p.finalizacao,
+            passing: p.passe,
+            dribbling: p.drible,
+            defending: p.defesa,
+            physical: p.fisico,
+          }),
+          club_id: p.clube_id,
+        };
+      }),
+    };
   }
 
   // ---------------------------------------------------------------------------
