@@ -13,16 +13,26 @@ type PositionType = 'GOL' | 'ZAG' | 'LAT' | 'MEI' | 'ATA';
 export class ClubsService {
   constructor(private readonly prisma: PrismaService) {}
 
-  // ---------------------------------------------------------------------------
-  // FUNÇÕES AUXILIARES DE CÁLCULO
-  // ---------------------------------------------------------------------------
-  private calculateMarketValue(baseValue: number, condition: string): number {
-    let factor = 1.0;
-    if (condition === 'LESIONADO') factor = 0.75;
-    else if (condition === 'SUSPENSO') factor = 0.9;
-
-    const marketValue = Math.round(baseValue * factor * 100) / 100;
-    return Math.max(1.0, marketValue);
+  private calculateMarketValue(
+    baseValue: number,
+    condition: string,
+    agility: number,
+    age: number,
+  ): number {
+    let discount =
+      condition === 'MAL_CONDICIONADO' ? 15 : condition === 'DOENTE' ? 30 : 0;
+    if (condition !== 'APTO') {
+      if (agility >= 80) discount /= 2;
+      else if (agility <= 30) discount += 10;
+    }
+    const ageAdjustment = age <= 21 ? 10 : age >= 32 ? -10 : 0;
+    const percentage = Math.max(-40, ageAdjustment - discount);
+    return Math.max(
+      1,
+      Math.round(
+        ((baseValue * (100 + percentage)) / 100 + Number.EPSILON) * 100,
+      ) / 100,
+    );
   }
 
   private calculateOverall(
@@ -105,7 +115,6 @@ export class ClubsService {
     clubId: number,
     query: { page?: number; limit?: number; type?: string },
   ) {
-    // 1. Validar existência do clube
     const club = await this.prisma.clube.findUnique({
       where: { id: clubId },
     });
@@ -123,7 +132,6 @@ export class ClubsService {
       whereCondition.tipo = query.type.toUpperCase();
     }
 
-    // 2. Busca paginada de transações e totalizador
     const [total, transactions, allClubTransactions] = await Promise.all([
       this.prisma.transacao.count({ where: whereCondition }),
       this.prisma.transacao.findMany({
@@ -137,7 +145,6 @@ export class ClubsService {
       }),
     ]);
 
-    // 3. Cálculo do resumo financeiro (summary)
     let total_entrances = 0;
     let total_exits = 0;
 
@@ -152,7 +159,6 @@ export class ClubsService {
 
     const net_result = total_entrances - total_exits;
 
-    // 4. Mapeamento da listagem
     const data = transactions.map((t) => ({
       id: t.id,
       club_id: t.clube_id,
@@ -218,9 +224,9 @@ export class ClubsService {
     }
 
     const uniqueIds = new Set(lineup.player_ids);
-    if (uniqueIds.size !== 11) {
+    if (uniqueIds.size !== 5) {
       throw new BadRequestException(
-        'A escalação deve conter 11 jogadores distintos.',
+        'A escalação deve conter 5 jogadores distintos.',
       );
     }
 
@@ -232,18 +238,13 @@ export class ClubsService {
       },
     });
 
-    if (players.length !== 11) {
+    if (players.length !== 5) {
       throw new BadRequestException(
-        'Todos os 11 jogadores devem pertencer ao seu clube.',
+        'Todos os titulares devem pertencer ao clube.',
       );
     }
 
-    const unavailable = players.find(
-      (p) =>
-        p.condicao === 'LESIONADO' ||
-        p.condicao === 'SUSPENSO' ||
-        p.condicao === 'DOENTE',
-    );
+    const unavailable = players.find((p) => p.condicao === 'DOENTE');
     if (unavailable) {
       throw new BadRequestException(
         `O jogador ${unavailable.nome} está indisponível para o jogo (Condição: ${unavailable.condicao}).`,
@@ -251,37 +252,42 @@ export class ClubsService {
     }
 
     const golCount = players.filter((p) => p.posicao === 'GOL').length;
-    const defCount = players.filter(
-      (p) => p.posicao === 'ZAG' || p.posicao === 'LAT',
-    ).length;
-    const meiCount = players.filter((p) => p.posicao === 'MEI').length;
-    const ataCount = players.filter((p) => p.posicao === 'ATA').length;
-
     if (golCount !== 1) {
       throw new BadRequestException(
         'A escalação deve conter exatamente 1 goleiro (GOL).',
       );
     }
 
-    const [expectedDef, expectedMei, expectedAta] = lineup.formation
-      .split('-')
-      .map(Number);
+    const formations: Record<string, string[]> = {
+      '3-1': ['ZAG', 'LAT', 'LAT', 'ATA'],
+      '2-2': ['ZAG', 'LAT', 'ATA', 'ATA'],
+      '2-1-1': ['ZAG', 'LAT', 'MEI', 'ATA'],
+      '1-2-1': ['ZAG', 'MEI', 'MEI', 'ATA'],
+    };
+    const expected = formations[lineup.formation];
+    const actual = players
+      .filter((p) => p.posicao !== 'GOL')
+      .map((p) => p.posicao)
+      .sort();
 
-    if (
-      defCount !== expectedDef ||
-      meiCount !== expectedMei ||
-      ataCount !== expectedAta
-    ) {
+    if (actual.join(',') !== [...expected].sort().join(',')) {
       throw new BadRequestException(
-        `A escalação não atende à formação ${lineup.formation}. Esperado: ${expectedDef} defensores, ${expectedMei} meias e ${expectedAta} atacantes.`,
+        `As posições não correspondem à formação ${lineup.formation}.`,
       );
     }
 
-    // Atualiza apenas a formação do clube no banco
-    await this.prisma.clube.update({
-      where: { id: clubId },
-      data: { formacao: lineup.formation },
-    });
+    await this.prisma.$transaction([
+      this.prisma.escalacao.deleteMany({ where: { clube_id: clubId } }),
+      this.prisma.clube.update({
+        where: { id: clubId },
+        data: { formacao: lineup.formation },
+      }),
+      ...lineup.player_ids.map((jogador_id) =>
+        this.prisma.escalacao.create({
+          data: { clube_id: clubId, jogador_id },
+        }),
+      ),
+    ]);
 
     return {
       message: 'Escalação e formação salvas com sucesso!',
@@ -301,16 +307,20 @@ export class ClubsService {
     }
 
     const starters = await this.prisma.jogador.findMany({
-      where: { clube_id: clubId, excluido_em: null },
+      where: {
+        clube_id: clubId,
+        excluido_em: null,
+        escalacaos: { is: { clube_id: clubId } },
+      },
       orderBy: { id: 'asc' },
-      take: 11,
     });
 
     return {
       club_id: club.id,
       club_name: club.nome,
       formation: club.formacao,
-      starters: starters.map((p) => {
+      complete: starters.length === 5,
+      players: starters.map((p) => {
         const baseValue = Number(p.valor_base);
         const position = p.posicao as PositionType;
 
@@ -322,7 +332,12 @@ export class ClubsService {
           age: p.idade,
           condition: p.condicao,
           base_value: baseValue,
-          market_value: this.calculateMarketValue(baseValue, p.condicao),
+          market_value: this.calculateMarketValue(
+            baseValue,
+            p.condicao,
+            p.agilidade,
+            p.idade,
+          ),
           pace: p.velocidade,
           shooting: p.finalizacao,
           passing: p.passe,
@@ -344,9 +359,6 @@ export class ClubsService {
     };
   }
 
-  // ---------------------------------------------------------------------------
-  // OPERAÇÕES DO RECURSO (CRUD)
-  // ---------------------------------------------------------------------------
   async create(createClubDto: CreateClubDto) {
     const totalClubs = await this.prisma.clube.count();
     if (totalClubs >= 20) {
@@ -402,11 +414,12 @@ export class ClubsService {
     const clubesMapeados = clubes.map((clube) => {
       let squad_value = 0;
 
-      // Itera para somar o valor atualizado do elenco
       clube.jogadores.forEach((jogador) => {
         squad_value += this.calculateMarketValue(
           Number(jogador.valor_base),
           jogador.condicao,
+          jogador.agilidade,
+          jogador.idade,
         );
       });
 
@@ -423,7 +436,6 @@ export class ClubsService {
       };
     });
 
-    // Ordenação combinada em memória
     if (orderBy === 'patrimony') {
       clubesMapeados.sort((a, b) => b.patrimony - a.patrimony); // Maior patrimônio primeiro
     } else {
@@ -450,11 +462,12 @@ export class ClubsService {
 
     let squad_value = 0;
 
-    // Mapeia o elenco inteiro formatado para inglês
     const players = clube.jogadores.map((jogador) => {
       const marketValue = this.calculateMarketValue(
         Number(jogador.valor_base),
         jogador.condicao,
+        jogador.agilidade,
+        jogador.idade,
       );
       squad_value += marketValue;
 

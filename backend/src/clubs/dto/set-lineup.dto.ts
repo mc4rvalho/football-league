@@ -6,7 +6,7 @@ import {
   IsInt,
 } from 'class-validator';
 
-const VALID_FORMATIONS = ['4-4-2', '4-3-3', '3-5-2'] as const;
+const VALID_FORMATIONS = ['3-1', '2-2', '2-1-1', '1-2-1'] as const;
 
 export class SetLineupDto {
   @IsIn(VALID_FORMATIONS, {
@@ -19,11 +19,11 @@ export class SetLineupDto {
     each: true,
     message: 'Cada ID de jogador deve ser um número inteiro.',
   })
-  @ArrayMinSize(11, {
-    message: 'A escalação deve conter exatamente 11 jogadores.',
+  @ArrayMinSize(5, {
+    message: 'A escalação deve conter exatamente 5 jogadores.',
   })
-  @ArrayMaxSize(11, {
-    message: 'A escalação deve conter exatamente 11 jogadores.',
+  @ArrayMaxSize(5, {
+    message: 'A escalação deve conter exatamente 5 jogadores.',
   })
   player_ids!: number[];
 }

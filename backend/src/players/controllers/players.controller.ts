@@ -51,22 +51,8 @@ export class PlayersController {
   }
 
   @Get()
-  async findAll(
-    @Query('page') page?: number,
-    @Query('limit') limit?: number,
-    @Query('name') name?: string,
-    @Query('position') position?: string,
-    @Query('club_id') club_id?: number,
-    @Query('condition') condition?: string,
-  ) {
-    return await this.playersService.findAll({
-      page,
-      limit,
-      name,
-      position,
-      club_id,
-      condition,
-    });
+  async findAll(@Query() query: Record<string, string>) {
+    return this.playersService.findAll(query);
   }
 
   @Get(':id')

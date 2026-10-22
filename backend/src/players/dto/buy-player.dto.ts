@@ -1,7 +1,11 @@
-import { IsInt, Min } from 'class-validator';
+import { IsInt, IsString, Matches, Min } from 'class-validator';
 
 export class BuyPlayerDto {
   @IsInt()
   @Min(1)
-  buyer_club_id!: number;
+  club_id!: number;
+
+  @IsString()
+  @Matches(/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}-03:00$/)
+  loyalty_until!: string;
 }

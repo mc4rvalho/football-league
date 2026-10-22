@@ -1,9 +1,8 @@
-// src/players/dto/update-condition.dto.ts
 import { IsEnum } from 'class-validator';
 
 export class UpdateConditionDto {
-  @IsEnum(['APTO', 'LESIONADO', 'SUSPENSO'], {
-    message: 'A condição deve ser APTO, LESIONADO ou SUSPENSO.',
+  @IsEnum(['APTO', 'MAL_CONDICIONADO', 'DOENTE'], {
+    message: 'A condição deve ser APTO, MAL_CONDICIONADO ou DOENTE.',
   })
-  condition!: 'APTO' | 'LESIONADO' | 'SUSPENSO';
+  condition!: 'APTO' | 'MAL_CONDICIONADO' | 'DOENTE';
 }

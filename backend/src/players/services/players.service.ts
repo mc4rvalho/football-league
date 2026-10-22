@@ -1,24 +1,22 @@
 import {
   BadRequestException,
+  ConflictException,
   Injectable,
   NotFoundException,
 } from '@nestjs/common';
-import { Jogador, Prisma } from '../../generated/prisma/client';
+import { Jogador } from '../../generated/prisma/client';
 import { CreatePlayerDto } from '../dto/create-player.dto';
 import { UpdatePlayerDto } from '../dto/update-player.dto';
 import { UpdateConditionDto } from '../dto/update-condition.dto';
 import { PrismaService } from '../../prisma/prisma.service';
 import { BuyPlayerDto } from '../dto/buy-player.dto';
+import { calculateMarketValue } from '../domain/market-value';
 
 type PositionType = 'GOL' | 'ZAG' | 'LAT' | 'MEI' | 'ATA';
 
 @Injectable()
 export class PlayersService {
   constructor(private readonly prisma: PrismaService) {}
-
-  // ---------------------------------------------------------------------------
-  // MÉTODOS PRIVADOS DE CÁLCULO (RN06)
-  // ---------------------------------------------------------------------------
 
   private calculateOverall(
     position: PositionType,
@@ -129,17 +127,18 @@ export class PlayersService {
     return Math.max(1.0, roundedValue);
   }
 
-  private calculateMarketValue(baseValue: number, condition: string): number {
-    let factor = 1.0;
-
-    if (condition === 'LESIONADO') {
-      factor = 0.75;
-    } else if (condition === 'SUSPENSO') {
-      factor = 0.9;
-    }
-
-    const marketValue = Math.round(baseValue * factor * 100) / 100;
-    return Math.max(1.0, marketValue);
+  private calculateMarketValue(
+    baseValue: number,
+    condition: string,
+    agility: number,
+    age: number,
+  ): number {
+    return calculateMarketValue(
+      baseValue,
+      condition as 'APTO' | 'MAL_CONDICIONADO' | 'DOENTE',
+      agility,
+      age,
+    );
   }
 
   private mapToResponse(player: Jogador) {
@@ -158,6 +157,8 @@ export class PlayersService {
     const marketValue = this.calculateMarketValue(
       baseValueNumber,
       player.condicao,
+      player.agilidade,
+      player.idade,
     );
 
     return {
@@ -181,185 +182,206 @@ export class PlayersService {
     };
   }
 
-  // ---------------------------------------------------------------------------
-  // MÉTODOS DE CALCULO (BUYER)
-  // ---------------------------------------------------------------------------
-
-  async buyPlayer(playerId: number, buyPlayerDto: BuyPlayerDto) {
-    const { buyer_club_id } = buyPlayerDto;
-
-    // 1. Validar se o jogador existe
+  async buyPlayer(playerId: number, dto: BuyPlayerDto) {
     const player = await this.prisma.jogador.findFirst({
       where: { id: playerId, excluido_em: null },
     });
-
-    if (!player) {
-      throw new NotFoundException(`Jogador com ID ${playerId} não encontrado.`);
-    }
-
-    // 2. Validar se o jogador já pertence ao clube comprador
-    if (player.clube_id === buyer_club_id) {
-      throw new BadRequestException('O jogador já pertence a este clube.');
-    }
-
-    // 3. Validar se o clube comprador existe
-    const buyerClub = await this.prisma.clube.findUnique({
-      where: { id: buyer_club_id },
+    if (!player) throw new NotFoundException('Jogador não encontrado.');
+    if (player.clube_id !== null)
+      throw new ConflictException('O jogador não está livre.');
+    const club = await this.prisma.clube.findUnique({
+      where: { id: dto.club_id },
     });
-
-    if (!buyerClub) {
-      throw new NotFoundException(
-        `Clube comprador com ID ${buyer_club_id} não encontrado.`,
-      );
-    }
-
-    // 4. Validar limite de elenco do comprador (máximo 25 jogadores)
-    const buyerSquadCount = await this.prisma.jogador.count({
-      where: { clube_id: buyer_club_id, excluido_em: null },
-    });
-
-    if (buyerSquadCount >= 25) {
+    if (!club) throw new NotFoundException('Clube comprador não encontrado.');
+    const now = new Date();
+    const loyaltyUntil = new Date(`${dto.loyalty_until}:00.000-03:00`);
+    if (
+      !Number.isFinite(loyaltyUntil.getTime()) ||
+      loyaltyUntil <= now ||
+      loyaltyUntil.getTime() > now.getTime() + 1095 * 86400000
+    ) {
       throw new BadRequestException(
-        'O clube comprador já atingiu o limite máximo de 25 jogadores no elenco.',
+        'Fim de fidelidade deve estar no futuro e em até 1.095 dias.',
       );
     }
-
-    // 5. Calcular valor de mercado atual do jogador
-    const baseValueNumber = Number(player.valor_base);
-    const transferValue = this.calculateMarketValue(
-      baseValueNumber,
+    const lastSale = await this.prisma.transacao.findFirst({
+      where: { jogador_id: playerId, tipo: 'VENDA' },
+      orderBy: [{ criado_em: 'desc' }, { id: 'desc' }],
+    });
+    if (lastSale?.clube_id === dto.club_id)
+      throw new ConflictException(
+        'O clube que vendeu o jogador não pode comprá-lo novamente.',
+      );
+    if (
+      (await this.prisma.jogador.count({
+        where: { clube_id: dto.club_id, excluido_em: null },
+      })) >= 12
+    )
+      throw new ConflictException(
+        'O elenco já atingiu o limite de 12 jogadores.',
+      );
+    const value = this.calculateMarketValue(
+      Number(player.valor_base),
       player.condicao,
+      player.agilidade,
+      player.idade,
     );
-
-    // 6. Validar saldo do clube comprador
-    const buyerBalance = Number(buyerClub.caixa);
-    if (buyerBalance < transferValue) {
-      throw new BadRequestException(
-        'Saldo em caixa insuficiente para realizar a compra.',
+    const fee =
+      value > 30 ? Math.round((value * 0.05 + Number.EPSILON) * 100) / 100 : 0;
+    const total = value + fee;
+    if (total > Number(club.caixa) * 0.5)
+      throw new ConflictException(
+        'O custo da compra ultrapassa 50% do caixa do clube.',
       );
-    }
-
-    const sellerClubId = player.clube_id;
-
-    // ---------------------------------------------------------------------------
-    // TRANSAÇÃO ATÔMICA (PRISMA $TRANSACTION)
-    // ---------------------------------------------------------------------------
-    const updatedPlayer = await this.prisma.$transaction(async (tx) => {
-      // A. Debitar valor do caixa do clube comprador
+    const cash = Number((Number(club.caixa) - total).toFixed(2));
+    const transaction = await this.prisma.$transaction(async (tx) => {
       await tx.clube.update({
-        where: { id: buyer_club_id },
-        data: {
-          caixa: { decrement: transferValue },
-        },
+        where: { id: dto.club_id },
+        data: { caixa: { decrement: total } },
       });
-
-      // B. Creditar valor no caixa do clube vendedor (se não for agente livre)
-      if (sellerClubId !== null) {
-        await tx.clube.update({
-          where: { id: sellerClubId },
-          data: {
-            caixa: { increment: transferValue },
-          },
-        });
-      }
-
-      // C. Transferir o vínculo do jogador para o clube comprador
-      const playerWithNewClub = await tx.jogador.update({
+      await tx.jogador.update({
         where: { id: playerId },
+        data: { clube_id: dto.club_id },
+      });
+      const contract = await tx.contrato.create({
         data: {
-          clube_id: buyer_club_id,
+          jogador_id: playerId,
+          clube_id: dto.club_id,
+          valor_compra: value,
+          fidelidade_ate: loyaltyUntil,
+          situacao: 'ATIVO',
         },
       });
-
-      // D. Registrar histórico da transação
-      await tx.transacao.create({
+      const record = await tx.transacao.create({
         data: {
-          clube_id: buyer_club_id,
+          clube_id: dto.club_id,
           jogador_id: playerId,
           nome_jogador: player.nome,
           tipo: 'COMPRA',
-          valor: transferValue,
-          taxa: 0,
+          valor: value,
+          taxa: fee,
           multa: 0,
-          variacao_caixa: -transferValue,
+          variacao_caixa: -total,
         },
       });
-
-      return playerWithNewClub;
+      return { contract, record };
     });
-
-    return this.mapToResponse(updatedPlayer);
+    return {
+      id: transaction.record.id,
+      club_id: dto.club_id,
+      player_id: playerId,
+      player_name: player.nome,
+      type: 'COMPRA',
+      value,
+      fee,
+      penalty: 0,
+      profit: null,
+      cash_change: -total,
+      created_at: transaction.record.criado_em,
+      contract: {
+        purchase_value: value,
+        loyalty_until: loyaltyUntil.toISOString(),
+        status: transaction.contract.situacao,
+      },
+      club_cash: cash,
+    };
   }
 
   async sellPlayer(playerId: number) {
-    // 1. Validar se o jogador existe
     const player = await this.prisma.jogador.findFirst({
       where: { id: playerId, excluido_em: null },
     });
-
-    if (!player) {
-      throw new NotFoundException(`Jogador com ID ${playerId} não encontrado.`);
-    }
-
-    // 2. Validar se o jogador pertence a algum clube
-    if (player.clube_id === null) {
-      throw new BadRequestException(
-        'O jogador é um agente livre e não pertence a nenhum clube para ser vendido.',
-      );
-    }
-
-    const sellerClubId = player.clube_id;
-
-    // 3. Calcular valor de mercado atual
-    const baseValueNumber = Number(player.valor_base);
-    const marketValue = this.calculateMarketValue(
-      baseValueNumber,
-      player.condicao,
+    if (!player) throw new NotFoundException('Jogador não encontrado.');
+    if (player.clube_id === null)
+      throw new ConflictException('Jogador livre não pode ser vendido.');
+    const clubId = player.clube_id;
+    const contract = await this.prisma.contrato.findFirst({
+      where: { jogador_id: playerId, clube_id: clubId, situacao: 'ATIVO' },
+      orderBy: { iniciado_em: 'desc' },
+    });
+    if (!contract)
+      throw new ConflictException('Contrato ativo do jogador não encontrado.');
+    const now = new Date();
+    const days = Math.max(
+      0,
+      Math.ceil((contract.fidelidade_ate.getTime() - now.getTime()) / 86400000),
     );
-
-    // ---------------------------------------------------------------------------
-    // TRANSAÇÃO ATÔMICA DA VENDA
-    // ---------------------------------------------------------------------------
-    const updatedPlayer = await this.prisma.$transaction(async (tx) => {
-      // Creditar o valor da venda no caixa do clube
+    const rate = days === 0 ? 0 : days <= 30 ? 5 : days <= 180 ? 10 : 20;
+    const value = this.calculateMarketValue(
+      Number(player.valor_base),
+      player.condicao,
+      player.agilidade,
+      player.idade,
+    );
+    const penalty = Math.min(
+      10,
+      Math.round(((value * rate) / 100 + Number.EPSILON) * 100) / 100,
+    );
+    const profit = Number((value - Number(contract.valor_compra)).toFixed(2));
+    const fee =
+      profit > 0
+        ? Math.round(
+            (Math.min(profit, 10) * 0.1 +
+              Math.max(0, profit - 10) * 0.2 +
+              Number.EPSILON) *
+              100,
+          ) / 100
+        : 0;
+    const credit = Number((value - penalty - fee).toFixed(2));
+    const club = await this.prisma.clube.findUniqueOrThrow({
+      where: { id: clubId },
+    });
+    const cash = Number((Number(club.caixa) + credit).toFixed(2));
+    const record = await this.prisma.$transaction(async (tx) => {
       await tx.clube.update({
-        where: { id: sellerClubId },
-        data: {
-          caixa: { increment: marketValue },
-        },
+        where: { id: clubId },
+        data: { caixa: { increment: credit } },
       });
-
-      // Desvincular o jogador (vira agente livre)
-      const freedPlayer = await tx.jogador.update({
+      await tx.jogador.update({
         where: { id: playerId },
+        data: { clube_id: null },
+      });
+      await tx.escalacao.deleteMany({ where: { jogador_id: playerId } });
+      await tx.contrato.update({
+        where: { id: contract.id },
         data: {
-          clube_id: null,
+          situacao: penalty > 0 ? 'RESCINDIDO' : 'ENCERRADO',
+          encerrado_em: now,
         },
       });
-
-      // Registrar o histórico financeiro da venda
-      await tx.transacao.create({
+      return tx.transacao.create({
         data: {
-          clube_id: sellerClubId,
+          clube_id: clubId,
           jogador_id: playerId,
           nome_jogador: player.nome,
           tipo: 'VENDA',
-          valor: marketValue,
-          taxa: 0,
-          multa: 0,
-          variacao_caixa: marketValue, // Entrada de caixa (positivo)
+          valor: value,
+          taxa: fee,
+          multa: penalty,
+          lucro: profit,
+          variacao_caixa: credit,
         },
       });
-
-      return freedPlayer;
     });
-
-    return this.mapToResponse(updatedPlayer);
+    return {
+      id: record.id,
+      club_id: clubId,
+      player_id: playerId,
+      player_name: player.nome,
+      type: 'VENDA',
+      value,
+      fee,
+      penalty,
+      profit,
+      cash_change: credit,
+      created_at: record.criado_em,
+      purchase_value: Number(contract.valor_compra),
+      remaining_days: days,
+      penalty_rate: rate,
+      contract_status: penalty > 0 ? 'RESCINDIDO' : 'ENCERRADO',
+      club_cash: cash,
+    };
   }
-
-  // ---------------------------------------------------------------------------
-  // OPERAÇÕES DO RECURSO (CRUD)
-  // ---------------------------------------------------------------------------
 
   async create(createPlayerDto: CreatePlayerDto) {
     const {
@@ -443,55 +465,63 @@ export class PlayersService {
     return this.mapToResponse(createdPlayer);
   }
 
-  async findAll(query: {
-    page?: number;
-    limit?: number;
-    name?: string;
-    position?: string;
-    club_id?: number;
-    condition?: string;
-  }) {
-    const page = Number(query.page) || 1;
-    const limit = Number(query.limit) || 10;
-    const skip = (page - 1) * limit;
-
-    const where: Prisma.JogadorWhereInput = {
-      excluido_em: null,
+  async findAll(query: Record<string, string>) {
+    const page = Math.max(1, Number(query.page) || 1);
+    const limit = Math.min(100, Math.max(1, Number(query.limit) || 10));
+    if (query.free === 'true' && query.club_id)
+      throw new BadRequestException('free não pode ser combinado com club_id.');
+    const rows = await this.prisma.jogador.findMany({
+      where: { excluido_em: null },
+    });
+    let players = rows.map((player) => this.mapToResponse(player));
+    const search = query.search?.trim();
+    if (search && search.length < 2)
+      throw new BadRequestException('search deve ter pelo menos 2 caracteres.');
+    if (search)
+      players = players.filter((p) =>
+        p.name.toLocaleLowerCase().includes(search.toLocaleLowerCase()),
+      );
+    if (query.position)
+      players = players.filter((p) => p.position === query.position);
+    if (query.condition)
+      players = players.filter((p) => p.condition === query.condition);
+    if (query.free === 'true')
+      players = players.filter((p) => p.club_id === null);
+    if (query.club_id)
+      players = players.filter((p) => p.club_id === Number(query.club_id));
+    if (query.min_age)
+      players = players.filter((p) => p.age >= Number(query.min_age));
+    if (query.max_age)
+      players = players.filter((p) => p.age <= Number(query.max_age));
+    if (query.min_value)
+      players = players.filter(
+        (p) => p.market_value >= Number(query.min_value),
+      );
+    if (query.max_value)
+      players = players.filter(
+        (p) => p.market_value <= Number(query.max_value),
+      );
+    const sorters: Record<
+      string,
+      (a: (typeof players)[number], b: (typeof players)[number]) => number
+    > = {
+      name: (a, b) => a.name.localeCompare(b.name, 'pt-BR'),
+      value_asc: (a, b) => a.market_value - b.market_value,
+      value_desc: (a, b) => b.market_value - a.market_value,
+      age_asc: (a, b) => a.age - b.age,
+      age_desc: (a, b) => b.age - a.age,
+      position: (a, b) => a.position.localeCompare(b.position),
     };
-
-    if (query.name) {
-      where.nome = { contains: query.name, mode: 'insensitive' };
-    }
-
-    if (query.position) {
-      where.posicao = query.position;
-    }
-
-    if (query.club_id !== undefined) {
-      where.clube_id =
-        Number(query.club_id) === 0 ? null : Number(query.club_id);
-    }
-
-    if (query.condition) {
-      where.condicao = query.condition;
-    }
-
-    const [total, players] = await Promise.all([
-      this.prisma.jogador.count({ where }),
-      this.prisma.jogador.findMany({
-        where,
-        skip,
-        take: limit,
-        orderBy: { id: 'asc' },
-      }),
-    ]);
-
+    if (query.sort && !sorters[query.sort])
+      throw new BadRequestException('sort inválido.');
+    players.sort(sorters[query.sort || 'name']);
+    const total = players.length;
     return {
-      data: players.map((player) => this.mapToResponse(player)),
+      data: players.slice((page - 1) * limit, page * limit),
       meta: {
-        total,
         page,
         limit,
+        total_items: total,
         total_pages: Math.ceil(total / limit),
       },
     };
@@ -518,83 +548,28 @@ export class PlayersService {
       throw new NotFoundException(`Jogador com ID ${id} não encontrado.`);
     }
 
-    const name = updatePlayerDto.name ?? existingPlayer.nome;
-    const position = (updatePlayerDto.position ??
-      existingPlayer.posicao) as PositionType;
-    const agility = updatePlayerDto.agility ?? existingPlayer.agilidade;
-    const age = updatePlayerDto.age ?? existingPlayer.idade;
-    const pace = updatePlayerDto.pace ?? existingPlayer.velocidade;
-    const shooting = updatePlayerDto.shooting ?? existingPlayer.finalizacao;
-    const passing = updatePlayerDto.passing ?? existingPlayer.passe;
-    const dribbling = updatePlayerDto.dribbling ?? existingPlayer.drible;
-    const defending = updatePlayerDto.defending ?? existingPlayer.defesa;
-    const physical = updatePlayerDto.physical ?? existingPlayer.fisico;
-    const potential = updatePlayerDto.potential ?? existingPlayer.potencial;
-
-    const attributesSum =
-      pace + shooting + passing + dribbling + defending + physical;
-    if (attributesSum > 480) {
-      throw new BadRequestException(
-        'A soma dos 6 atributos principais não pode ultrapassar 480.',
+    if (updatePlayerDto.age < existingPlayer.idade)
+      throw new ConflictException('A idade não pode diminuir.');
+    if (
+      existingPlayer.clube_id !== null &&
+      updatePlayerDto.position !== existingPlayer.posicao
+    )
+      throw new ConflictException(
+        'A posição não pode mudar enquanto o jogador pertence a um clube.',
       );
-    }
-
-    const maxAttr = Math.max(
-      pace,
-      shooting,
-      passing,
-      dribbling,
-      defending,
-      physical,
-    );
-
-    if (potential < maxAttr) {
+    if (updatePlayerDto.age >= 35 && updatePlayerDto.agility > 85)
       throw new BadRequestException(
-        'O potencial não pode ser menor que o maior atributo do jogador.',
+        'Jogador com 35 anos ou mais pode ter agilidade máxima 85.',
       );
-    }
-
-    if (age >= 33 && potential !== maxAttr) {
-      throw new BadRequestException(
-        'Para jogadores com 33 anos ou mais, o potencial deve ser estritamente igual ao seu maior atributo.',
-      );
-    }
-
-    if (age >= 35 && agility > 85) {
-      throw new BadRequestException(
-        'Para jogadores com 35 anos ou mais, a agilidade não pode ultrapassar 85.',
-      );
-    }
-
-    const overall = this.calculateOverall(position, {
-      pace,
-      shooting,
-      passing,
-      dribbling,
-      defending,
-      physical,
-    });
-
-    const baseValue = this.calculateBaseValue(overall, potential, age);
-
     const updatedPlayer = await this.prisma.jogador.update({
       where: { id },
       data: {
-        nome: name,
-        posicao: position,
-        agilidade: agility,
-        idade: age,
-        velocidade: pace,
-        finalizacao: shooting,
-        passe: passing,
-        drible: dribbling,
-        defesa: defending,
-        fisico: physical,
-        potencial: potential,
-        valor_base: baseValue,
+        nome: updatePlayerDto.name,
+        posicao: updatePlayerDto.position,
+        agilidade: updatePlayerDto.agility,
+        idade: updatePlayerDto.age,
       },
     });
-
     return this.mapToResponse(updatedPlayer);
   }
 
@@ -607,11 +582,13 @@ export class PlayersService {
       throw new NotFoundException(`Jogador com ID ${id} não encontrado.`);
     }
 
+    if (player.condicao === 'DOENTE' && updateConditionDto.condition === 'APTO')
+      throw new ConflictException(
+        'De DOENTE, o jogador deve passar por MAL_CONDICIONADO antes de APTO.',
+      );
     const updatedPlayer = await this.prisma.jogador.update({
       where: { id },
-      data: {
-        condicao: updateConditionDto.condition,
-      },
+      data: { condicao: updateConditionDto.condition },
     });
 
     return this.mapToResponse(updatedPlayer);

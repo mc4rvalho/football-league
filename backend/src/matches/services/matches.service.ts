@@ -195,7 +195,7 @@ export class MatchesService {
 
     return {
       id: match.id,
-      round: dto.round,
+      round: 1,
       status: 'FINALIZADA',
       home_club: { id: homeClub.id, name: homeClub.nome, score: homeScore },
       away_club: { id: awayClub.id, name: awayClub.nome, score: awayScore },

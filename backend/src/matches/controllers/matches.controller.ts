@@ -8,9 +8,11 @@ import {
   ParseIntPipe,
   Post,
   Query,
+  Res,
 } from '@nestjs/common';
 import { CreateMatchDto } from '../dto/create-match.dto';
 import { MatchesService } from '../services/matches.service';
+import type { Response } from 'express';
 
 @Controller()
 export class MatchesController {
@@ -18,8 +20,13 @@ export class MatchesController {
 
   @Post('matches')
   @HttpCode(HttpStatus.CREATED)
-  async createMatch(@Body() dto: CreateMatchDto) {
-    return await this.matchesService.createMatch(dto);
+  async createMatch(
+    @Body() dto: CreateMatchDto,
+    @Res({ passthrough: true }) res: Response,
+  ) {
+    const match = await this.matchesService.createMatch(dto);
+    res.setHeader('Location', `/api/v1/matches/${match.id}`);
+    return match;
   }
 
   @Get('matches')
