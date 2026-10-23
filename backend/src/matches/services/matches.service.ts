@@ -102,103 +102,189 @@ export class MatchesService {
       );
     }
 
-    const [homeStarters, awayStarters] = await Promise.all([
-      this.prisma.jogador.findMany({
-        where: { clube_id: dto.home_club_id, excluido_em: null },
-        take: 11,
-      }),
-      this.prisma.jogador.findMany({
-        where: { clube_id: dto.away_club_id, excluido_em: null },
-        take: 11,
-      }),
+    const [homeLineup, awayLineup] = await Promise.all([
+      this.getStartingPlayers(dto.home_club_id),
+      this.getStartingPlayers(dto.away_club_id),
     ]);
-
-    if (homeStarters.length !== 11 || awayStarters.length !== 11) {
+    if (homeLineup.length !== 5 || awayLineup.length !== 5) {
       throw new BadRequestException(
-        'Ambos os clubes precisam ter uma escalação válida com 11 titulares configurados antes da partida.',
+        `Escalação incompleta: ${homeLineup.length !== 5 ? homeClub.nome : awayClub.nome} não tem os 5 titulares.`,
+      );
+    }
+    const unavailable = [...homeLineup, ...awayLineup].find(
+      (p) => p.condicao === 'DOENTE',
+    );
+    if (unavailable) {
+      throw new BadRequestException(
+        `Escalação incompleta: ${unavailable.nome} está doente e não pode jogar.`,
       );
     }
 
-    const getAvgOverall = (
-      players: typeof homeStarters,
-      posFilter?: (p: PositionType) => boolean,
+    const duelPlan = (
+      attackers: typeof homeLineup,
+      defenders: typeof awayLineup,
     ) => {
-      const filtered = posFilter
-        ? players.filter((p) => posFilter(p.posicao as PositionType))
-        : players;
-      if (filtered.length === 0) return 0;
-
-      const sum = filtered.reduce(
-        (acc, p) =>
-          acc +
-          this.calculateOverall(
-            p.posicao as PositionType,
-            {
-              pace: p.velocidade,
-              shooting: p.finalizacao,
-              passing: p.passe,
-              dribbling: p.drible,
-              defending: p.defesa,
-              physical: p.fisico,
-            },
-            p.condicao,
+      const keeper = defenders.find((p) => p.posicao === 'GOL')!;
+      const fieldAttackers = attackers
+        .filter((p) => p.posicao !== 'GOL')
+        .sort((a, b) => {
+          const order: Record<string, number> = {
+            ATA: 0,
+            MEI: 1,
+            LAT: 2,
+            ZAG: 3,
+          };
+          return order[a.posicao] - order[b.posicao];
+        });
+      const fieldDefenders = defenders
+        .filter((p) => p.posicao !== 'GOL')
+        .sort((a, b) => {
+          const order: Record<string, number> = {
+            ZAG: 0,
+            LAT: 1,
+            MEI: 2,
+            ATA: 3,
+          };
+          return order[a.posicao] - order[b.posicao];
+        });
+      return fieldAttackers.slice(0, 3).map((attacker, index) => {
+        const defender = index === 0 ? keeper : fieldDefenders[index - 1];
+        const rawAttack =
+          attacker.posicao === 'ATA'
+            ? attacker.finalizacao
+            : attacker.posicao === 'MEI'
+              ? attacker.passe
+              : attacker.drible;
+        const rawDefense = defender?.defesa ?? 0;
+        return {
+          attacker,
+          defender,
+          attackAttribute:
+            attacker.posicao === 'ATA'
+              ? 'Finaliz.'
+              : attacker.posicao === 'MEI'
+                ? 'Passe'
+                : 'Drible',
+          attackValue: Math.round(
+            rawAttack * (attacker.condicao === 'MAL_CONDICIONADO' ? 0.85 : 1),
           ),
-        0,
-      );
-      return sum / filtered.length;
+          defenseValue: Math.round(
+            rawDefense * (defender?.condicao === 'MAL_CONDICIONADO' ? 0.85 : 1),
+          ),
+        };
+      });
     };
-
-    const homeGol = getAvgOverall(homeStarters, (p) => p === 'GOL');
-    const awayGol = getAvgOverall(awayStarters, (p) => p === 'GOL');
-
-    const homeAta = getAvgOverall(homeStarters, (p) => p === 'ATA');
-    const awayAta = getAvgOverall(awayStarters, (p) => p === 'ATA');
-
-    const homeDef = getAvgOverall(
-      homeStarters,
-      (p) => p === 'ZAG' || p === 'LAT',
-    );
-    const awayDef = getAvgOverall(
-      awayStarters,
-      (p) => p === 'ZAG' || p === 'LAT',
-    );
-
-    const homeMei = getAvgOverall(homeStarters, (p) => p === 'MEI');
-    const awayMei = getAvgOverall(awayStarters, (p) => p === 'MEI');
-
-    const homeOverallTeam = getAvgOverall(homeStarters);
-    const awayOverallTeam = getAvgOverall(awayStarters);
-
-    let homeScore = 0;
-    let awayScore = 0;
-
-    if (homeAta > awayGol + 3) homeScore++;
-    if (awayAta > homeGol + 3) awayScore++;
-    if (homeAta > awayDef + 2) homeScore++;
-    if (awayAta > homeDef + 2) awayScore++;
-    if (homeMei > awayMei + 4) homeScore++;
-    if (awayMei > homeMei + 4) awayScore++;
-    if (homeOverallTeam > awayOverallTeam + 5) homeScore++;
-    if (awayOverallTeam > homeOverallTeam + 5) awayScore++;
-
+    const homeDuels = duelPlan(homeLineup, awayLineup);
+    const awayDuels = duelPlan(awayLineup, homeLineup);
+    const duels = [
+      ...homeDuels.map((d, i) => ({
+        ...d,
+        attackingClubId: homeClub.id,
+        order: i + 1,
+      })),
+      ...awayDuels.map((d, i) => ({
+        ...d,
+        attackingClubId: awayClub.id,
+        order: i + 4,
+      })),
+    ];
     const match = await this.prisma.partida.create({
       data: {
         mandante_id: dto.home_club_id,
         visitante_id: dto.away_club_id,
-        gols_mandante: homeScore,
-        gols_visitante: awayScore,
-        formacao_mandante: homeClub.formacao ?? '4-4-2',
-        formacao_visitante: awayClub.formacao ?? '4-4-2',
+        gols_mandante: homeDuels.filter((d) => d.attackValue > d.defenseValue)
+          .length,
+        gols_visitante: awayDuels.filter((d) => d.attackValue > d.defenseValue)
+          .length,
+        formacao_mandante: homeClub.formacao ?? '2-1-1',
+        formacao_visitante: awayClub.formacao ?? '2-1-1',
         jogada_em: new Date(),
+        duelos: {
+          create: duels.map((d) => ({
+            ordem: d.order,
+            clube_atacante_id: d.attackingClubId,
+            atacante_id: d.attacker.id,
+            defensor_id: d.defender.id,
+            nome_atacante: d.attacker.nome,
+            nome_defensor: d.defender.nome,
+            posicao_atacante: d.attacker.posicao,
+            posicao_defensor: d.defender.posicao,
+            condicao_atacante: d.attacker.condicao,
+            condicao_defensor: d.defender.condicao,
+            atributo_ataque: d.attackAttribute,
+            atributo_defesa: 'Defesa',
+            valor_ataque: d.attackValue,
+            valor_defesa: d.defenseValue,
+            gol: d.attackValue > d.defenseValue,
+          })),
+        },
+      },
+      include: {
+        mandante: true,
+        visitante: true,
+        duelos: { orderBy: { ordem: 'asc' } },
       },
     });
+    return this.mapMatch(match);
+  }
 
+  private async getStartingPlayers(clubId: number) {
+    const lineup = await this.prisma.escalacao.findMany({
+      where: { clube_id: clubId },
+      include: { jogador: true },
+      orderBy: [{ criado_em: 'asc' }, { jogador_id: 'asc' }],
+    });
+    return lineup.map((item) => item.jogador);
+  }
+
+  private mapMatch(
+    match: Prisma.PartidaGetPayload<{
+      include: { mandante: true; visitante: true; duelos: true };
+    }>,
+  ) {
     return {
       id: match.id,
-      round: 1,
+      played_at: match.jogada_em,
       status: 'FINALIZADA',
-      home_club: { id: homeClub.id, name: homeClub.nome, score: homeScore },
-      away_club: { id: awayClub.id, name: awayClub.nome, score: awayScore },
+      home: {
+        club_id: match.mandante.id,
+        club_name: match.mandante.nome,
+        goals: match.gols_mandante,
+        formation: match.formacao_mandante,
+      },
+      away: {
+        club_id: match.visitante.id,
+        club_name: match.visitante.nome,
+        goals: match.gols_visitante,
+        formation: match.formacao_visitante,
+      },
+      result:
+        match.gols_mandante === match.gols_visitante
+          ? 'Empate'
+          : match.gols_mandante > match.gols_visitante
+            ? 'Vitória do mandante'
+            : 'Vitória do visitante',
+      duels: match.duelos.map((d) => ({
+        order: d.ordem,
+        attacking_club_id: d.clube_atacante_id,
+        attacker: {
+          player_id: d.atacante_id,
+          player_name: d.nome_atacante,
+          position: d.posicao_atacante,
+          condition: d.condicao_atacante,
+          attribute: d.atributo_ataque,
+          value: d.valor_ataque,
+        },
+        defender: {
+          player_id: d.defensor_id,
+          player_name: d.nome_defensor,
+          position: d.posicao_defensor,
+          condition: d.condicao_defensor,
+          attribute: d.atributo_defesa,
+          value: d.valor_defesa,
+        },
+        goal: d.gol,
+      })),
     };
   }
 
@@ -213,51 +299,27 @@ export class MatchesService {
 
     const matches = await this.prisma.partida.findMany({
       where,
-      include: { mandante: true, visitante: true },
-      orderBy: { id: 'asc' },
+      include: { mandante: true, visitante: true, duelos: true },
+      orderBy: [{ jogada_em: 'desc' }, { id: 'desc' }],
     });
-
-    return matches.map((m) => ({
-      id: m.id,
-      round: query.round ?? 1,
-      status: 'FINALIZADA',
-      home_club: {
-        id: m.mandante.id,
-        name: m.mandante.nome,
-        score: m.gols_mandante,
-      },
-      away_club: {
-        id: m.visitante.id,
-        name: m.visitante.nome,
-        score: m.gols_visitante,
-      },
-    }));
+    return matches.map((m) => this.mapMatch(m));
   }
 
   async findOneMatch(id: number) {
     const match = await this.prisma.partida.findUnique({
       where: { id },
-      include: { mandante: true, visitante: true },
+      include: {
+        mandante: true,
+        visitante: true,
+        duelos: { orderBy: { ordem: 'asc' } },
+      },
     });
 
     if (!match) {
       throw new NotFoundException(`Partida com ID ${id} não encontrada.`);
     }
 
-    return {
-      id: match.id,
-      status: 'FINALIZADA',
-      home_club: {
-        id: match.mandante.id,
-        name: match.mandante.nome,
-        score: match.gols_mandante,
-      },
-      away_club: {
-        id: match.visitante.id,
-        name: match.visitante.nome,
-        score: match.gols_visitante,
-      },
-    };
+    return this.mapMatch(match);
   }
 
   async getStandings() {
@@ -333,13 +395,26 @@ export class MatchesService {
       }
     });
 
-    return Array.from(tableMap.values()).sort((a, b) => {
-      if (b.points !== a.points) return b.points - a.points;
-      if (b.wins !== a.wins) return b.wins - a.wins;
-      if (b.goal_difference !== a.goal_difference)
-        return b.goal_difference - a.goal_difference;
-      if (b.goals_for !== a.goals_for) return b.goals_for - a.goals_for;
-      return a.name.localeCompare(b.name);
-    });
+    return Array.from(tableMap.values())
+      .sort((a, b) => {
+        if (b.points !== a.points) return b.points - a.points;
+        if (b.goal_difference !== a.goal_difference)
+          return b.goal_difference - a.goal_difference;
+        if (b.goals_for !== a.goals_for) return b.goals_for - a.goals_for;
+        return a.name.localeCompare(b.name);
+      })
+      .map((row, index) => ({
+        position: index + 1,
+        club_id: row.id,
+        club_name: row.name,
+        played: row.played,
+        wins: row.wins,
+        draws: row.draws,
+        losses: row.losses,
+        goals_for: row.goals_for,
+        goals_against: row.goals_against,
+        goal_difference: row.goal_difference,
+        points: row.points,
+      }));
   }
 }

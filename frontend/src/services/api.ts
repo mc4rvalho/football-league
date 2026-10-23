@@ -8,7 +8,10 @@ export const apiBaseUrl = `${apiOrigin}/api/v1`;
 
 const client = axios.create({
   baseURL: apiBaseUrl,
-  headers: { Accept: "application/json" },
+  headers: {
+    Accept: "application/json",
+    "Content-Type": "application/json",
+  },
 });
 
 export async function api<T>(

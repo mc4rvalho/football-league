@@ -1,7 +1,4 @@
-// This is your Prisma schema file,
-// learn more about it in the docs: https://pris.ly/d/prisma-schema
 
-// Get a free hosted Postgres database in seconds: `npx create-db`
 
 generator client {
   provider     = "prisma-client"
@@ -33,7 +30,6 @@ model Jogador {
   criado_em     DateTime  @default(now()) @db.Timestamp
   atualizado_em DateTime  @updatedAt @db.Timestamp
 
-  // Relations
   clube      Clube?      @relation(fields: [clube_id], references: [id])
   contratos  Contrato[]
   transacoes Transacao[]
@@ -54,7 +50,6 @@ model Clube {
   formacao         String?  @db.VarChar(5)
   criado_em        DateTime @default(now()) @db.Timestamp
 
-  // Relations
   jogadores  Jogador[]
   contratos  Contrato[]
   transacoes Transacao[]
@@ -77,7 +72,6 @@ model Contrato {
   iniciado_em    DateTime  @default(now()) @db.Timestamp
   encerrado_em   DateTime? @db.Timestamp
 
-  // Relations
   jogador Jogador @relation(fields: [jogador_id], references: [id])
   clube   Clube   @relation(fields: [clube_id], references: [id])
 
@@ -97,7 +91,6 @@ model Transacao {
   variacao_caixa Decimal  @db.Decimal(8, 2)
   criado_em      DateTime @default(now()) @db.Timestamp
 
-  // Relations
   clube   Clube   @relation(fields: [clube_id], references: [id])
   jogador Jogador @relation(fields: [jogador_id], references: [id])
 
@@ -109,7 +102,6 @@ model Escalacao {
   jogador_id Int      @unique
   criado_em  DateTime @default(now()) @db.Timestamp
 
-  // Relations
   clube   Clube   @relation(fields: [clube_id], references: [id])
   jogador Jogador @relation(fields: [jogador_id], references: [id])
 
@@ -127,7 +119,6 @@ model Partida {
   formacao_visitante String   @db.VarChar(5)
   jogada_em          DateTime @default(now()) @db.Timestamp
 
-  // Relations
   mandante  Clube          @relation("MandantePartida", fields: [mandante_id], references: [id])
   visitante Clube          @relation("VisitantePartida", fields: [visitante_id], references: [id])
   duelos    DueloPartida[]
@@ -154,7 +145,6 @@ model DueloPartida {
   valor_defesa      Int
   gol               Boolean
 
-  // Relations
   partida        Partida @relation(fields: [partida_id], references: [id])
   clube_atacante Clube   @relation("ClubeAtacanteDuelo", fields: [clube_atacante_id], references: [id])
   atacante       Jogador @relation("AtacanteDuelo", fields: [atacante_id], references: [id])

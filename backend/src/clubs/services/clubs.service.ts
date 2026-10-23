@@ -113,7 +113,12 @@ export class ClubsService {
 
   async getTransactions(
     clubId: number,
-    query: { page?: number; limit?: number; type?: string },
+    query: {
+      page?: number;
+      limit?: number;
+      type?: string;
+      player_id?: number | string;
+    },
   ) {
     const club = await this.prisma.clube.findUnique({
       where: { id: clubId },
@@ -129,10 +134,16 @@ export class ClubsService {
 
     const whereCondition: Prisma.TransacaoWhereInput = { clube_id: clubId };
     if (query.type) {
-      whereCondition.tipo = query.type.toUpperCase();
+      const types = query.type
+        .split(',')
+        .map((type) => type.trim().toUpperCase())
+        .filter(Boolean);
+      if (types.length === 1) whereCondition.tipo = types[0];
+      else if (types.length) whereCondition.tipo = { in: types };
     }
+    if (query.player_id) whereCondition.jogador_id = Number(query.player_id);
 
-    const [total, transactions, allClubTransactions] = await Promise.all([
+    const [total, transactions, summaryTransactions] = await Promise.all([
       this.prisma.transacao.count({ where: whereCondition }),
       this.prisma.transacao.findMany({
         where: whereCondition,
@@ -140,45 +151,56 @@ export class ClubsService {
         take: limit,
         orderBy: { criado_em: 'desc' },
       }),
-      this.prisma.transacao.findMany({
-        where: { clube_id: clubId },
-      }),
+      this.prisma.transacao.findMany({ where: whereCondition }),
     ]);
-
-    let total_entrances = 0;
-    let total_exits = 0;
-
-    allClubTransactions.forEach((t) => {
-      const val = Number(t.variacao_caixa);
-      if (val > 0) {
-        total_entrances += val;
-      } else {
-        total_exits += Math.abs(val);
-      }
-    });
-
-    const net_result = total_entrances - total_exits;
 
     const data = transactions.map((t) => ({
       id: t.id,
       club_id: t.clube_id,
-      player_ids: t.jogador_id,
+      player_id: t.jogador_id,
       player_name: t.nome_jogador,
       type: t.tipo,
-      amount: Number(t.valor),
+      value: Number(t.valor),
+      fee: Number(t.taxa),
+      penalty: Number(t.multa),
+      profit: t.lucro === null ? null : Number(t.lucro),
       cash_change: Number(t.variacao_caixa),
       created_at: t.criado_em,
     }));
 
+    const summary = summaryTransactions.reduce(
+      (totals, transaction) => {
+        const value = Number(transaction.valor);
+        const fee = Number(transaction.taxa);
+        const penalty = Number(transaction.multa);
+        const profit =
+          transaction.lucro === null ? 0 : Number(transaction.lucro);
+        if (transaction.tipo === 'COMPRA') totals.total_spent += value + fee;
+        else totals.total_received += Number(transaction.variacao_caixa);
+        totals.total_fees += fee;
+        totals.total_penalties += penalty;
+        totals.total_profit += profit;
+        return totals;
+      },
+      {
+        total_spent: 0,
+        total_received: 0,
+        total_fees: 0,
+        total_penalties: 0,
+        total_profit: 0,
+      },
+    );
+
     return {
       data,
-      summary: {
-        total_entrances: Number(total_entrances.toFixed(2)),
-        total_exits: Number(total_exits.toFixed(2)),
-        net_result: Number(net_result.toFixed(2)),
-      },
+      summary: Object.fromEntries(
+        Object.entries(summary).map(([key, value]) => [
+          key,
+          Number(value.toFixed(2)),
+        ]),
+      ),
       meta: {
-        total,
+        total_items: total,
         page,
         limit,
         total_pages: Math.ceil(total / limit),
@@ -186,7 +208,10 @@ export class ClubsService {
     };
   }
 
-  async exportTransactionsCsv(clubId: number): Promise<string> {
+  async exportTransactionsCsv(
+    clubId: number,
+    query: { type?: string; player_id?: string },
+  ): Promise<string> {
     const club = await this.prisma.clube.findUnique({
       where: { id: clubId },
     });
@@ -195,8 +220,18 @@ export class ClubsService {
       throw new NotFoundException(`Clube com ID ${clubId} não encontrado.`);
     }
 
+    const where: Prisma.TransacaoWhereInput = { clube_id: clubId };
+    if (query.type) {
+      const types = query.type
+        .split(',')
+        .map((type) => type.trim().toUpperCase())
+        .filter(Boolean);
+      if (types.length === 1) where.tipo = types[0];
+      else if (types.length) where.tipo = { in: types };
+    }
+    if (query.player_id) where.jogador_id = Number(query.player_id);
     const transactions = await this.prisma.transacao.findMany({
-      where: { clube_id: clubId },
+      where,
       orderBy: { criado_em: 'desc' },
     });
 
@@ -367,23 +402,38 @@ export class ClubsService {
       );
     }
 
-    const nomeNormalizado = createClubDto.name
-      .trim()
-      .toLowerCase()
-      .replace(/\s+/g, ' ');
+    const normalizarNome = (nome: string) =>
+      nome
+        .trim()
+        .normalize('NFD')
+        .replace(/[\u0300-\u036f]/g, '')
+        .toLocaleLowerCase('pt-BR')
+        .replace(/\s+/g, ' ');
+    const nomeNormalizado = normalizarNome(createClubDto.name);
     const siglaFormatada = createClubDto.sigla.trim().toUpperCase();
 
-    const clubeExistente = await this.prisma.clube.findFirst({
-      where: {
-        OR: [{ nome_normalizado: nomeNormalizado }, { sigla: siglaFormatada }],
-      },
+    const clubesExistentes = await this.prisma.clube.findMany({
+      select: { nome: true, nome_normalizado: true, sigla: true },
     });
+    const clubeComMesmoNome = clubesExistentes.find(
+      (clube) =>
+        normalizarNome(clube.nome) === nomeNormalizado ||
+        normalizarNome(clube.nome_normalizado || '') === nomeNormalizado,
+    );
+    const clubeComMesmaSigla = clubesExistentes.find(
+      (clube) =>
+        clube.sigla.trim().toLocaleUpperCase('pt-BR') === siglaFormatada,
+    );
 
-    if (clubeExistente) {
+    if (clubeComMesmoNome) {
       throw new BadRequestException(
-        'Já existe um clube cadastrado com este nome ou sigla.',
+        `Já existe um clube com o nome “${clubeComMesmoNome.nome}”.`,
       );
     }
+    if (clubeComMesmaSigla)
+      throw new BadRequestException(
+        `Já existe um clube com a sigla “${clubeComMesmaSigla.sigla}”.`,
+      );
 
     const createdClub = await this.prisma.clube.create({
       data: {
@@ -397,8 +447,8 @@ export class ClubsService {
     return {
       id: createdClub.id,
       name: createdClub.nome,
-      sigla: createdClub.sigla,
-      balance: Number(createdClub.caixa),
+      acronym: createdClub.sigla,
+      cash: Number(createdClub.caixa),
     };
   }
 
@@ -406,7 +456,7 @@ export class ClubsService {
     const clubes = await this.prisma.clube.findMany({
       include: {
         jogadores: {
-          where: { excluido_em: null }, // Ignora jogadores demitidos logicamente
+          where: { excluido_em: null },
         },
       },
     });
@@ -429,17 +479,17 @@ export class ClubsService {
       return {
         id: clube.id,
         name: clube.nome,
-        sigla: clube.sigla,
-        balance: balance,
+        acronym: clube.sigla,
+        cash: balance,
         squad_value: Number(squad_value.toFixed(2)),
-        patrimony: Number(patrimony.toFixed(2)),
+        net_worth: Number(patrimony.toFixed(2)),
       };
     });
 
-    if (orderBy === 'patrimony') {
-      clubesMapeados.sort((a, b) => b.patrimony - a.patrimony); // Maior patrimônio primeiro
+    if (orderBy === 'patrimony' || orderBy === 'net_worth') {
+      clubesMapeados.sort((a, b) => b.net_worth - a.net_worth);
     } else {
-      clubesMapeados.sort((a, b) => a.name.localeCompare(b.name)); // Ordem alfabética (padrão)
+      clubesMapeados.sort((a, b) => a.name.localeCompare(b.name));
     }
 
     return clubesMapeados;
@@ -451,7 +501,14 @@ export class ClubsService {
       include: {
         jogadores: {
           where: { excluido_em: null },
-          orderBy: { nome: 'asc' }, // Elenco ordenado alfabeticamente
+          orderBy: { nome: 'asc' },
+          include: {
+            contratos: {
+              where: { situacao: 'ATIVO' },
+              orderBy: { iniciado_em: 'desc' },
+              take: 1,
+            },
+          },
         },
       },
     });
@@ -496,6 +553,30 @@ export class ClubsService {
           physical: jogador.fisico,
         }),
         club_id: jogador.clube_id,
+        contract: jogador.contratos[0]
+          ? {
+              loyalty_until: jogador.contratos[0].fidelidade_ate,
+              remaining_days: Math.max(
+                0,
+                Math.ceil(
+                  (jogador.contratos[0].fidelidade_ate.getTime() - Date.now()) /
+                    86400000,
+                ),
+              ),
+              penalty_rate: (() => {
+                const days = Math.max(
+                  0,
+                  Math.ceil(
+                    (jogador.contratos[0].fidelidade_ate.getTime() -
+                      Date.now()) /
+                      86400000,
+                  ),
+                );
+                return days === 0 ? 0 : days <= 30 ? 5 : days <= 180 ? 10 : 20;
+              })(),
+              purchase_value: Number(jogador.contratos[0].valor_compra),
+            }
+          : undefined,
       };
     });
 
@@ -505,11 +586,11 @@ export class ClubsService {
     return {
       id: clube.id,
       name: clube.nome,
-      sigla: clube.sigla,
-      balance: balance,
+      acronym: clube.sigla,
+      cash: balance,
       squad_value: Number(squad_value.toFixed(2)),
-      patrimony: Number(patrimony.toFixed(2)),
-      players, // Devolve o array formatado
+      net_worth: Number(patrimony.toFixed(2)),
+      players,
     };
   }
 }

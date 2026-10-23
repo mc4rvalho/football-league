@@ -34,6 +34,9 @@ const emptyPlayer = {
   physical: 58,
   potential: 82,
 };
+type ListKey =
+  "players" | "clubs" | "club" | "history" | "matches" | "standings";
+type ListStatus = { loading: boolean; error: string | null };
 
 export function useAppController() {
   const [section, setSection] = useState<Section>("home"),
@@ -46,6 +49,23 @@ export function useAppController() {
     } | null>(null),
     [busy, setBusy] = useState(false),
     [loading, setLoading] = useState(false);
+  const [actionError, setActionError] = useState<string | null>(null);
+  const [listStatus, setListStatus] = useState<Record<ListKey, ListStatus>>({
+    players: { loading: false, error: null },
+    clubs: { loading: false, error: null },
+    club: { loading: false, error: null },
+    history: { loading: false, error: null },
+    matches: { loading: false, error: null },
+    standings: { loading: false, error: null },
+  });
+  const updateListStatus = useCallback(
+    (key: ListKey, status: Partial<ListStatus>) =>
+      setListStatus((current) => ({
+        ...current,
+        [key]: { ...current[key], ...status },
+      })),
+    [],
+  );
   const [page, setPage] = useState(1),
     [players, setPlayers] = useState<Page<Player> | null>(null),
     [search, setSearch] = useState(""),
@@ -53,17 +73,28 @@ export function useAppController() {
     [condition, setCondition] = useState(""),
     [clubFilter, setClubFilter] = useState(""),
     [free, setFree] = useState(false),
+    [clubOnly, setClubOnly] = useState(false),
     [sort, setSort] = useState("name"),
     [minAge, setMinAge] = useState(""),
     [maxAge, setMaxAge] = useState(""),
     [minValue, setMinValue] = useState(""),
     [maxValue, setMaxValue] = useState("");
+  const [playerSummary, setPlayerSummary] = useState({
+    total: 0,
+    free: 0,
+    inClubs: 0,
+  });
+  const [playerCounts, setPlayerCounts] = useState({
+    total: 0,
+    free: 0,
+    inClubs: 0,
+  });
   const [clubData, setClubData] = useState<
       (Club & { players: Player[] }) | null
     >(null),
     [clubTab, setClubTab] = useState<"roster" | "lineup" | "history">("roster"),
     [history, setHistory] = useState<TransactionHistory | null>(null),
-    [historyType, setHistoryType] = useState(""),
+    [historyType, setHistoryType] = useState("COMPRA,VENDA"),
     [historyPlayer, setHistoryPlayer] = useState("");
   const [matches, setMatches] = useState<Match[]>([]),
     [selectedMatch, setSelectedMatch] = useState<Match | null>(null),
@@ -88,30 +119,64 @@ export function useAppController() {
     window.setTimeout(() => setNotice(null), 5000);
   };
   const loadClubs = useCallback(async () => {
+    updateListStatus("clubs", { loading: true, error: null });
     try {
       setClubs(await api<Club[]>("/clubs?sort=name"));
     } catch (e) {
-      notify(messageOf(e), "error");
+      setClubs([]);
+      updateListStatus("clubs", { error: messageOf(e) });
+    } finally {
+      updateListStatus("clubs", { loading: false });
     }
-  }, []);
+  }, [updateListStatus]);
   const loadPlayers = useCallback(async () => {
     setLoading(true);
+    updateListStatus("players", { loading: true, error: null });
     try {
       const term = search.trim();
-      const data = await api<Page<Player>>(
-        `/players${queryString({ search: term.length >= 2 ? term : "", position, condition, free: free ? "true" : "", club_id: clubFilter || "", min_age: minAge, max_age: maxAge, min_value: minValue, max_value: maxValue, sort, page, limit: 10 })}`,
-      );
+      const sharedFilters = {
+        search: term.length >= 2 ? term : "",
+        position,
+        condition,
+        club_id: clubFilter || "",
+        min_age: minAge,
+        max_age: maxAge,
+        min_value: minValue,
+        max_value: maxValue,
+      };
+      const [data, allCount, freeCount, clubCount] = await Promise.all([
+        api<Page<Player>>(
+          `/players${queryString({ ...sharedFilters, free: free ? "true" : "", in_club: clubOnly ? "true" : "", sort, page, limit: 10 })}`,
+        ),
+        api<Page<Player>>(
+          `/players${queryString({ ...sharedFilters, sort, page: 1, limit: 1 })}`,
+        ),
+        api<Page<Player>>(
+          `/players${queryString({ ...sharedFilters, club_id: "", free: "true", sort, page: 1, limit: 1 })}`,
+        ),
+        api<Page<Player>>(
+          `/players${queryString({ ...sharedFilters, in_club: "true", sort, page: 1, limit: 1 })}`,
+        ),
+      ]);
       setPlayers(data);
+      setPlayerCounts({
+        total: allCount.meta.total_items,
+        free: freeCount.meta.total_items,
+        inClubs: clubCount.meta.total_items,
+      });
     } catch (e) {
-      notify(messageOf(e), "error");
+      setPlayers(null);
+      updateListStatus("players", { error: messageOf(e) });
     } finally {
       setLoading(false);
+      updateListStatus("players", { loading: false });
     }
   }, [
     search,
     position,
     condition,
     free,
+    clubOnly,
     clubFilter,
     minAge,
     maxAge,
@@ -119,31 +184,55 @@ export function useAppController() {
     maxValue,
     sort,
     page,
+    updateListStatus,
   ]);
-  const loadClub = useCallback(async (id: number) => {
+  const loadPlayerSummary = useCallback(async () => {
     try {
-      setClubData(await api<Club & { players: Player[] }>(`/clubs/${id}`));
-    } catch (e) {
-      setClubData(null);
-      notify(messageOf(e), "error");
+      const result = await api<Page<Player>>("/players?limit=100");
+      setPlayerSummary({
+        total: result.meta.total_items,
+        free: result.data.filter((player) => player.club_id === null).length,
+        inClubs: result.data.filter((player) => player.club_id !== null).length,
+      });
+    } catch {
+      setPlayerSummary({ total: 0, free: 0, inClubs: 0 });
     }
   }, []);
+  const loadClub = useCallback(
+    async (id: number) => {
+      updateListStatus("club", { loading: true, error: null });
+      try {
+        setClubData(await api<Club & { players: Player[] }>(`/clubs/${id}`));
+      } catch (e) {
+        setClubData(null);
+        updateListStatus("club", { error: messageOf(e) });
+      } finally {
+        updateListStatus("club", { loading: false });
+      }
+    },
+    [updateListStatus],
+  );
   const loadHistory = useCallback(
     async (id: number) => {
+      updateListStatus("history", { loading: true, error: null });
       try {
         setHistory(
           await api<TransactionHistory>(
-            `/clubs/${id}/transactions${queryString({ type: historyType, player_id: historyPlayer })}`,
+            `/clubs/${id}/transactions${queryString({ type: historyType, player_id: historyPlayer, limit: 100 })}`,
           ),
         );
       } catch (e) {
         setHistory(null);
-        notify(messageOf(e), "error");
+        updateListStatus("history", { error: messageOf(e) });
+      } finally {
+        updateListStatus("history", { loading: false });
       }
     },
-    [historyType, historyPlayer],
+    [historyType, historyPlayer, updateListStatus],
   );
   const loadLeague = useCallback(async () => {
+    updateListStatus("matches", { loading: true, error: null });
+    updateListStatus("standings", { loading: true, error: null });
     try {
       const [m, s] = await Promise.all([
         api<Match[]>("/matches"),
@@ -152,13 +241,20 @@ export function useAppController() {
       setMatches(m);
       setStandings(s);
     } catch (e) {
-      notify(messageOf(e), "error");
+      setMatches([]);
+      setStandings([]);
+      updateListStatus("matches", { error: messageOf(e) });
+      updateListStatus("standings", { error: messageOf(e) });
+    } finally {
+      updateListStatus("matches", { loading: false });
+      updateListStatus("standings", { loading: false });
     }
-  }, []);
+  }, [updateListStatus]);
   useEffect(() => {
     void loadClubs();
     void loadLeague();
-  }, [loadClubs, loadLeague]);
+    void loadPlayerSummary();
+  }, [loadClubs, loadLeague, loadPlayerSummary]);
   useEffect(() => {
     if (section === "players") void loadPlayers();
   }, [section, loadPlayers]);
@@ -176,18 +272,20 @@ export function useAppController() {
   ) => {
     if (busy) return;
     setBusy(true);
+    setActionError(null);
     try {
       await action();
       notify(success);
       after?.();
       await loadClubs();
+      await loadPlayerSummary();
       if (section === "players") await loadPlayers();
       if (section === "clubs" && clubId) await loadClub(clubId);
       if (section === "clubs" && clubId && clubTab === "history")
         await loadHistory(clubId);
       await loadLeague();
     } catch (e) {
-      notify(messageOf(e), "error");
+      setActionError(messageOf(e));
     } finally {
       setBusy(false);
     }
@@ -195,11 +293,13 @@ export function useAppController() {
   const openNewPlayer = () => {
     setEditing(null);
     setPlayerForm(emptyPlayer);
+    setActionError(null);
     setModal("player");
   };
   const openEdit = (p: Player) => {
     setEditing(p);
     setPlayerForm({ ...emptyPlayer, ...p });
+    setActionError(null);
     setModal("player");
   };
   const savePlayer = async (e: FormEvent) => {
@@ -247,7 +347,14 @@ export function useAppController() {
   const saveClub = async (e: FormEvent) => {
     e.preventDefault();
     await run(
-      () => api("/clubs", { method: "POST", body: JSON.stringify(clubForm) }),
+      () =>
+        api("/clubs", {
+          method: "POST",
+          body: JSON.stringify({
+            name: clubForm.name,
+            sigla: clubForm.acronym,
+          }),
+        }),
       "Clube criado.",
       () => {
         setModal("");
@@ -261,20 +368,29 @@ export function useAppController() {
     const loyalty = buyForm.loyalty_until
       ? `${buyForm.loyalty_until}:00-03:00`
       : "";
-    await run(async () => {
-      const result = await api<TransactionReceipt>(
-        `/players/${activePlayer.id}/buy`,
-        {
-          method: "POST",
-          body: JSON.stringify({
-            club_id: Number(buyForm.club_id),
-            loyalty_until: loyalty,
-          }),
-        },
-      );
-      setReceipt(result);
-      setModal("receipt");
-    }, "Compra realizada.");
+    await run(
+      async () => {
+        const result = await api<TransactionReceipt>(
+          `/players/${activePlayer.id}/buy`,
+          {
+            method: "POST",
+            body: JSON.stringify({
+              club_id: Number(buyForm.club_id),
+              loyalty_until: loyalty,
+            }),
+          },
+        );
+        setReceipt(result);
+        setModal("receipt");
+      },
+      "Compra realizada.",
+      () => {
+        setFree(false);
+        setClubOnly(false);
+        setClubFilter("");
+        setPage(1);
+      },
+    );
   };
   const sellPlayer = async () => {
     if (!activePlayer) return;
@@ -315,7 +431,8 @@ export function useAppController() {
           }),
         });
         setSelectedMatch(m);
-        setModal("result");
+        setModal("");
+        setSection("match-detail");
       },
       "Partida jogada.",
       () => {},
@@ -344,11 +461,20 @@ export function useAppController() {
     }
   };
   const openBuy = (p: Player) => {
+    const loyaltyDate = new Date();
+    loyaltyDate.setDate(loyaltyDate.getDate() + 365);
+    loyaltyDate.setHours(15, 0, 0, 0);
+    const localDateTime = new Date(
+      loyaltyDate.getTime() - loyaltyDate.getTimezoneOffset() * 60000,
+    )
+      .toISOString()
+      .slice(0, 16);
     setActivePlayer(p);
     setBuyForm({
       club_id: preferredBuyerClub || (clubs[0] ? String(clubs[0].id) : ""),
-      loyalty_until: "",
+      loyalty_until: localDateTime,
     });
+    setActionError(null);
     setModal("buy");
   };
   const openLineup = async () => {
@@ -367,7 +493,8 @@ export function useAppController() {
   const showMatch = async (match: Match) => {
     try {
       setSelectedMatch(await api<Match>(`/matches/${match.id}`));
-      setModal("result");
+      setModal("");
+      setSection("match-detail");
     } catch (error) {
       notify(messageOf(error), "error");
     }
@@ -383,9 +510,11 @@ export function useAppController() {
         ? "Clubes"
         : section === "matches"
           ? "Partidas"
-          : section === "standings"
-            ? "Classificação"
-            : "Gestão da liga";
+          : section === "match-detail"
+            ? "Detalhes da partida"
+            : section === "standings"
+              ? "Classificação"
+              : "Gestão da liga";
   return {
     section,
     clubs,
@@ -397,12 +526,18 @@ export function useAppController() {
     setPreferredBuyerClub,
     notice,
     setNotice,
+    actionError,
+    listStatus,
+    setActionError,
     busy,
     setBusy,
     loading,
     setLoading,
     page,
     setPage,
+    playerSummary,
+    playerCounts,
+    loadPlayerSummary,
     players,
     setPlayers,
     search,
@@ -415,6 +550,8 @@ export function useAppController() {
     setClubFilter,
     free,
     setFree,
+    clubOnly,
+    setClubOnly,
     sort,
     setSort,
     minAge,

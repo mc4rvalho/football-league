@@ -194,7 +194,7 @@ export class PlayersService {
     });
     if (!club) throw new NotFoundException('Clube comprador não encontrado.');
     const now = new Date();
-    const loyaltyUntil = new Date(`${dto.loyalty_until}:00.000-03:00`);
+    const loyaltyUntil = new Date(dto.loyalty_until);
     if (
       !Number.isFinite(loyaltyUntil.getTime()) ||
       loyaltyUntil <= now ||
@@ -487,6 +487,8 @@ export class PlayersService {
       players = players.filter((p) => p.condition === query.condition);
     if (query.free === 'true')
       players = players.filter((p) => p.club_id === null);
+    if (query.in_club === 'true')
+      players = players.filter((p) => p.club_id !== null);
     if (query.club_id)
       players = players.filter((p) => p.club_id === Number(query.club_id));
     if (query.min_age)

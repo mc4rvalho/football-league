@@ -6,6 +6,6 @@ export class BuyPlayerDto {
   club_id!: number;
 
   @IsString()
-  @Matches(/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}-03:00$/)
+  @Matches(/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d{1,3})?-03:00$/)
   loyalty_until!: string;
 }

@@ -6,7 +6,6 @@ import {
   HttpCode,
   HttpStatus,
   Param,
-  ParseIntPipe,
   Patch,
   Post,
   Put,
@@ -14,6 +13,7 @@ import {
   Res,
 } from '@nestjs/common';
 import type { Response } from 'express';
+import { ResourceIdPipe } from '../../common/pipes/resource-id.pipe';
 import { CreatePlayerDto } from '../dto/create-player.dto';
 import { UpdatePlayerDto } from '../dto/update-player.dto';
 import { UpdateConditionDto } from '../dto/update-condition.dto';
@@ -38,7 +38,7 @@ export class PlayersController {
   @Post(':id/buy')
   @HttpCode(HttpStatus.OK)
   async buyPlayer(
-    @Param('id', ParseIntPipe) id: number,
+    @Param('id', ResourceIdPipe) id: number,
     @Body() buyPlayerDto: BuyPlayerDto,
   ) {
     return await this.playersService.buyPlayer(id, buyPlayerDto);
@@ -46,7 +46,7 @@ export class PlayersController {
 
   @Post(':id/sell')
   @HttpCode(HttpStatus.OK)
-  async sellPlayer(@Param('id', ParseIntPipe) id: number) {
+  async sellPlayer(@Param('id', ResourceIdPipe) id: number) {
     return await this.playersService.sellPlayer(id);
   }
 
@@ -56,13 +56,13 @@ export class PlayersController {
   }
 
   @Get(':id')
-  async findOne(@Param('id', ParseIntPipe) id: number) {
+  async findOne(@Param('id', ResourceIdPipe) id: number) {
     return await this.playersService.findOne(id);
   }
 
   @Put(':id')
   async update(
-    @Param('id', ParseIntPipe) id: number,
+    @Param('id', ResourceIdPipe) id: number,
     @Body() updatePlayerDto: UpdatePlayerDto,
   ) {
     return await this.playersService.update(id, updatePlayerDto);
@@ -70,7 +70,7 @@ export class PlayersController {
 
   @Patch(':id/condition')
   async updateCondition(
-    @Param('id', ParseIntPipe) id: number,
+    @Param('id', ResourceIdPipe) id: number,
     @Body() updateConditionDto: UpdateConditionDto,
   ) {
     return await this.playersService.updateCondition(id, updateConditionDto);
@@ -78,7 +78,7 @@ export class PlayersController {
 
   @Delete(':id')
   @HttpCode(HttpStatus.NO_CONTENT)
-  async remove(@Param('id', ParseIntPipe) id: number) {
+  async remove(@Param('id', ResourceIdPipe) id: number) {
     return await this.playersService.remove(id);
   }
 }

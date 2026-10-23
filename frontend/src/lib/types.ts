@@ -66,9 +66,16 @@ export type TransactionHistory = {
     total_penalties: number;
     total_profit: number;
   };
+  meta: {
+    total_items: number;
+    page: number;
+    limit: number;
+    total_pages: number;
+  };
 };
 export type TransactionReceipt = {
   id: number;
+  club_id: number;
   type: "COMPRA" | "VENDA";
   value: number;
   fee: number;

@@ -1,4 +1,3 @@
--- CreateTable
 CREATE TABLE "jogadores" (
     "id" SERIAL NOT NULL,
     "nome" VARCHAR(100) NOT NULL,
@@ -22,7 +21,6 @@ CREATE TABLE "jogadores" (
     CONSTRAINT "jogadores_pkey" PRIMARY KEY ("id")
 );
 
--- CreateTable
 CREATE TABLE "clubes" (
     "id" SERIAL NOT NULL,
     "nome" VARCHAR(60) NOT NULL,
@@ -35,7 +33,6 @@ CREATE TABLE "clubes" (
     CONSTRAINT "clubes_pkey" PRIMARY KEY ("id")
 );
 
--- CreateTable
 CREATE TABLE "contratos" (
     "id" SERIAL NOT NULL,
     "jogador_id" INTEGER NOT NULL,
@@ -49,7 +46,6 @@ CREATE TABLE "contratos" (
     CONSTRAINT "contratos_pkey" PRIMARY KEY ("id")
 );
 
--- CreateTable
 CREATE TABLE "transacoes" (
     "id" SERIAL NOT NULL,
     "clube_id" INTEGER NOT NULL,
@@ -66,7 +62,6 @@ CREATE TABLE "transacoes" (
     CONSTRAINT "transacoes_pkey" PRIMARY KEY ("id")
 );
 
--- CreateTable
 CREATE TABLE "escalacoes" (
     "clube_id" INTEGER NOT NULL,
     "jogador_id" INTEGER NOT NULL,
@@ -75,7 +70,6 @@ CREATE TABLE "escalacoes" (
     CONSTRAINT "escalacoes_pkey" PRIMARY KEY ("clube_id","jogador_id")
 );
 
--- CreateTable
 CREATE TABLE "partidas" (
     "id" SERIAL NOT NULL,
     "mandante_id" INTEGER NOT NULL,
@@ -89,7 +83,6 @@ CREATE TABLE "partidas" (
     CONSTRAINT "partidas_pkey" PRIMARY KEY ("id")
 );
 
--- CreateTable
 CREATE TABLE "duelos_partida" (
     "id" SERIAL NOT NULL,
     "partida_id" INTEGER NOT NULL,
@@ -112,53 +105,36 @@ CREATE TABLE "duelos_partida" (
     CONSTRAINT "duelos_partida_pkey" PRIMARY KEY ("id")
 );
 
--- CreateIndex
 CREATE UNIQUE INDEX "clubes_nome_key" ON "clubes"("nome");
 
--- CreateIndex
 CREATE UNIQUE INDEX "clubes_nome_normalizado_key" ON "clubes"("nome_normalizado");
 
--- CreateIndex
 CREATE UNIQUE INDEX "clubes_sigla_key" ON "clubes"("sigla");
 
--- CreateIndex
 CREATE UNIQUE INDEX "escalacoes_jogador_id_key" ON "escalacoes"("jogador_id");
 
--- AddForeignKey
 ALTER TABLE "jogadores" ADD CONSTRAINT "jogadores_clube_id_fkey" FOREIGN KEY ("clube_id") REFERENCES "clubes"("id") ON DELETE SET NULL ON UPDATE CASCADE;
 
--- AddForeignKey
 ALTER TABLE "contratos" ADD CONSTRAINT "contratos_jogador_id_fkey" FOREIGN KEY ("jogador_id") REFERENCES "jogadores"("id") ON DELETE RESTRICT ON UPDATE CASCADE;
 
--- AddForeignKey
 ALTER TABLE "contratos" ADD CONSTRAINT "contratos_clube_id_fkey" FOREIGN KEY ("clube_id") REFERENCES "clubes"("id") ON DELETE RESTRICT ON UPDATE CASCADE;
 
--- AddForeignKey
 ALTER TABLE "transacoes" ADD CONSTRAINT "transacoes_clube_id_fkey" FOREIGN KEY ("clube_id") REFERENCES "clubes"("id") ON DELETE RESTRICT ON UPDATE CASCADE;
 
--- AddForeignKey
 ALTER TABLE "transacoes" ADD CONSTRAINT "transacoes_jogador_id_fkey" FOREIGN KEY ("jogador_id") REFERENCES "jogadores"("id") ON DELETE RESTRICT ON UPDATE CASCADE;
 
--- AddForeignKey
 ALTER TABLE "escalacoes" ADD CONSTRAINT "escalacoes_clube_id_fkey" FOREIGN KEY ("clube_id") REFERENCES "clubes"("id") ON DELETE RESTRICT ON UPDATE CASCADE;
 
--- AddForeignKey
 ALTER TABLE "escalacoes" ADD CONSTRAINT "escalacoes_jogador_id_fkey" FOREIGN KEY ("jogador_id") REFERENCES "jogadores"("id") ON DELETE RESTRICT ON UPDATE CASCADE;
 
--- AddForeignKey
 ALTER TABLE "partidas" ADD CONSTRAINT "partidas_mandante_id_fkey" FOREIGN KEY ("mandante_id") REFERENCES "clubes"("id") ON DELETE RESTRICT ON UPDATE CASCADE;
 
--- AddForeignKey
 ALTER TABLE "partidas" ADD CONSTRAINT "partidas_visitante_id_fkey" FOREIGN KEY ("visitante_id") REFERENCES "clubes"("id") ON DELETE RESTRICT ON UPDATE CASCADE;
 
--- AddForeignKey
 ALTER TABLE "duelos_partida" ADD CONSTRAINT "duelos_partida_partida_id_fkey" FOREIGN KEY ("partida_id") REFERENCES "partidas"("id") ON DELETE RESTRICT ON UPDATE CASCADE;
 
--- AddForeignKey
 ALTER TABLE "duelos_partida" ADD CONSTRAINT "duelos_partida_clube_atacante_id_fkey" FOREIGN KEY ("clube_atacante_id") REFERENCES "clubes"("id") ON DELETE RESTRICT ON UPDATE CASCADE;
 
--- AddForeignKey
 ALTER TABLE "duelos_partida" ADD CONSTRAINT "duelos_partida_atacante_id_fkey" FOREIGN KEY ("atacante_id") REFERENCES "jogadores"("id") ON DELETE RESTRICT ON UPDATE CASCADE;
 
--- AddForeignKey
 ALTER TABLE "duelos_partida" ADD CONSTRAINT "duelos_partida_defensor_id_fkey" FOREIGN KEY ("defensor_id") REFERENCES "jogadores"("id") ON DELETE RESTRICT ON UPDATE CASCADE;

@@ -5,11 +5,11 @@ import {
   HttpCode,
   HttpStatus,
   Param,
-  ParseIntPipe,
   Post,
   Query,
   Res,
 } from '@nestjs/common';
+import { ResourceIdPipe } from '../../common/pipes/resource-id.pipe';
 import { CreateMatchDto } from '../dto/create-match.dto';
 import { MatchesService } from '../services/matches.service';
 import type { Response } from 'express';
@@ -38,7 +38,7 @@ export class MatchesController {
   }
 
   @Get('matches/:id')
-  async findOneMatch(@Param('id', ParseIntPipe) id: number) {
+  async findOneMatch(@Param('id', ResourceIdPipe) id: number) {
     return await this.matchesService.findOneMatch(id);
   }
 

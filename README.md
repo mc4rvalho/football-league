@@ -86,15 +86,15 @@ npm run dev
 
 A interface fica em **`http://localhost:5173`**. `VITE_API_URL` recebe somente a origem `http://localhost:4000`; o cliente Axios acrescenta `/api/v1`.
 
-### 3.3 Subir a aplicação com Docker Compose
+### 3.3 Subir somente o banco com Docker Compose
 
-Como alternativa aos passos manuais, na raiz do repositório um comando constrói e inicia interface, API e banco:
+O Docker Compose da raiz inicia somente o PostgreSQL. Backend e frontend são instalados e executados com npm nos passos 3.1 e 3.2.
 
 ```shell
-docker compose up --build
+docker compose up -d db
 ```
 
-Use `docker compose down` para parar os serviços. Para apagar também o banco local, use `docker compose down --volumes`.
+Use `docker compose down` para parar e remover o container, preservando os dados no volume. Para apagar também o banco local, use `docker compose down --volumes`.
 
 ### 3.4 Publicar a API no Render
 
@@ -115,6 +115,8 @@ Use o endereço interno do PostgreSQL para o serviço Render na mesma região. O
 3. Em **Environment Variables**, defina `VITE_API_URL` como a origem pública da API Render, sem `/api/v1`, por exemplo `https://sua-api.onrender.com`.
 4. Faça o deploy. A URL exibida pela Vercel (por exemplo, `https://seu-projeto.vercel.app`) é a URL do frontend.
 5. Volte às variáveis do serviço Render e defina `CORS_ORIGIN` exatamente como a origem do frontend publicada, sem barra final. Salve e faça novo deploy do backend. Se mudar `VITE_API_URL`, publique o frontend novamente, pois Vite incorpora essa variável no build.
+
+Em planos gratuitos, o serviço web pode entrar em suspensão após inatividade. O PostgreSQL gratuito do Render expira 30 dias após a criação, tem limite de 1 GB e não oferece backups. Para manter os dados por mais tempo, escolha um plano de banco pago ou configure uma rotina de backup antes de publicar. Consulte as [limitações atuais dos planos gratuitos do Render](https://render.com/docs/free).
 
 ### 3.6 Testes, lint e formatação
 
@@ -156,14 +158,14 @@ frontend/
   src/components/           Componentes visuais separados por responsabilidade
   src/hooks/                Estado e ações da aplicação
   src/services/api.ts       Cliente Axios e URL base da API
-docker-compose.yaml         PostgreSQL, API e frontend
+docker-compose.yaml         PostgreSQL local (banco senai_db)
 ```
 
 **Backend:** NestJS (`@nestjs/common`, `@nestjs/core` e `@nestjs/platform-express`) organiza a API, rotas e injeção de dependências; `@nestjs/mapped-types` reutiliza propriedades entre DTOs; `reflect-metadata` e RxJS dão suporte ao modelo de execução do NestJS; Prisma Client acessa os dados e Prisma CLI gera o cliente e aplica migrations; `@prisma/adapter-pg` e `pg` conectam Prisma ao PostgreSQL; `class-validator` e `class-transformer` validam e convertem dados de entrada; `@nestjs/swagger` publica a documentação OpenAPI; Jest e `ts-jest` executam os testes; ESLint e Prettier verificam código e formatação.
 
 **Frontend:** React e React DOM constroem a interface por componentes; TypeScript verifica tipos; Vite executa o servidor local e gera a versão de produção; Tailwind CSS e `@tailwindcss/vite` fornecem estilos utilitários; Axios centraliza chamadas HTTP; Radix UI Dialog fornece diálogos acessíveis; `lucide-react` fornece ícones; `class-variance-authority`, `clsx` e `tailwind-merge` compõem e mesclam classes dos controles. Vitest executa os testes, Testing Library verifica a interface e jsdom fornece um DOM simulado; ESLint e Prettier verificam código e formatação.
 
-**Infraestrutura:** Docker Compose inicia os serviços locais; as imagens públicas Node.js, PostgreSQL e Nginx constroem e executam a aplicação. As dependências vêm do registro público npm e as imagens do Docker Hub; não há submódulos, imagens próprias nem dependência de serviço hospedado pelo projeto.
+**Infraestrutura:** Docker Compose inicia somente o PostgreSQL local a partir da imagem pública `postgres:16-alpine`. Backend e frontend rodam com npm fora do Docker. As dependências vêm do registro público npm e a imagem do banco vem do Docker Hub; não há submódulos, imagens próprias nem dependência de serviço hospedado pelo projeto.
 
 ## 6. Decisões e premissas
 
@@ -177,8 +179,10 @@ docker-compose.yaml         PostgreSQL, API e frontend
 
 ## 7. Funcionalidades não implementadas
 
-Nenhuma funcionalidade obrigatória está declarada como pendente. A publicação em Render ou Vercel não é provisionada automaticamente; é uma opção de hospedagem que depende da configuração da conta e dos serviços externos.
+A revisão do código e os testes disponíveis não apontaram funcionalidade obrigatória pendente. Entre os diferenciais, testes, lint e formatação passam no backend e no frontend; o backend também oferece OpenAPI/Swagger e logs de requisição. O Compose atual sobe somente o banco, não a aplicação completa em um comando. Há regras CSS responsivas, mas a utilização em 375 px ainda precisa de conferência visual antes da entrega. A publicação em Render ou Vercel depende da configuração das contas e dos serviços externos.
 
 ## 8. Uso de inteligência artificial
 
-Utilizei o OpenAI Codex como apoio para analisar o contrato do projeto, revisar e implementar alterações no backend, organizar telas e componentes do frontend, preparar a documentação e configurar testes e ferramentas de desenvolvimento. O código final deve ser revisado pelos responsáveis pelo repositório antes da entrega.
+Utilizei o OpenAI Codex como apoio de tech lead durante o desenvolvimento do backend e do frontend. Em cada tarefa, analisamos o contrato do projeto para entender o que era necessário e o que não fazia parte do escopo. O Codex ajudou a decompor as tarefas, mostrou caminhos de implementação, revisou alterações e explicou as decisões e os problemas encontrados. Eu estudava as orientações, aplicava ou adaptava as mudanças e decidia o que aceitar ou descartar. Aproveitei principalmente as sugestões alinhadas ao contrato e descartei ou corrigi as que não correspondiam ao comportamento esperado. Em algumas tarefas, o Codex também editou arquivos diretamente no ambiente de desenvolvimento, e eu revisei o resultado.
+
+Utilizei o Gemini para estruturar as tarefas e organizar a documentação do projeto. As respostas das ferramentas foram usadas como apoio e conferidas em relação ao contrato e ao comportamento esperado da aplicação.

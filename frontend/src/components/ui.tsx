@@ -10,6 +10,7 @@ import * as DialogPrimitive from "@radix-ui/react-dialog";
 import { cva, type VariantProps } from "class-variance-authority";
 import { X } from "lucide-react";
 import { cn } from "../lib/utils";
+import { Icon } from "./Icon";
 
 const buttonVariants = cva(
   "inline-flex items-center justify-center gap-1.5 whitespace-nowrap rounded-md text-xs font-medium transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-500 disabled:pointer-events-none disabled:opacity-50",
@@ -91,12 +92,14 @@ export function Dialog({
   title,
   description,
   onClose,
+  className = "",
   children,
 }: PropsWithChildren<{
   open: boolean;
   title: string;
   description?: string;
   onClose: () => void;
+  className?: string;
 }>) {
   return (
     <DialogPrimitive.Root
@@ -108,7 +111,7 @@ export function Dialog({
       <DialogPrimitive.Portal>
         <DialogPrimitive.Overlay className="overlay" />
         <DialogPrimitive.Content
-          className="dialog"
+          className={cn("dialog", className)}
           aria-describedby={description ? "dialog-description" : undefined}
         >
           <header className="dialog-head">
@@ -142,14 +145,16 @@ export function Field({
   children,
   help,
   error,
+  className = "",
 }: {
   label: string;
   children: ReactNode;
   help?: string;
   error?: string;
+  className?: string;
 }) {
   return (
-    <label className="field">
+    <label className={cn("field", className)}>
       <span>{label}</span>
       {children}
       {error ? (
@@ -183,6 +188,47 @@ export function Empty({
       <strong>{title}</strong>
       <p>{detail}</p>
       {action}
+    </div>
+  );
+}
+
+export function LoadingState({
+  label,
+  rows = 5,
+}: {
+  label: string;
+  rows?: number;
+}) {
+  return (
+    <div className="list-loading" role="status" aria-label={label}>
+      <span>{label}…</span>
+      {Array.from({ length: rows }, (_, index) => (
+        <i key={index} />
+      ))}
+    </div>
+  );
+}
+
+export function LoadError({
+  title,
+  error,
+  onRetry,
+}: {
+  title: string;
+  error: string;
+  onRetry: () => void;
+}) {
+  return (
+    <div className="list-error" role="alert">
+      <span className="list-error-heading">
+        <Icon name="circle-alert" size={15} />
+        <b>{title}</b>
+      </span>
+      <p>Tente de novo. Se a API respondeu, mostre o erro dela.</p>
+      <small>{error}</small>
+      <Button variant="outline" onClick={onRetry}>
+        <Icon name="refresh-cw" size={12} /> Tentar de novo
+      </Button>
     </div>
   );
 }
