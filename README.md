@@ -96,29 +96,7 @@ docker compose up -d db
 
 Use `docker compose down` para parar e remover o container, preservando os dados no volume. Para apagar também o banco local, use `docker compose down --volumes`.
 
-### 3.4 Publicar a API no Render
-
-Envie primeiro as alterações e os arquivos `package-lock.json` para a branch do repositório conectada às plataformas. No Render:
-
-1. Crie um PostgreSQL e escolha uma região.
-2. Crie um **Web Service** ligado ao mesmo repositório e região. Defina `backend` como **Root Directory** e selecione **Node** como runtime.
-3. Configure **Build Command** como `npm ci --include=dev && npx prisma generate && npm run build` e **Start Command** como `npx prisma migrate deploy && npm run start:prod`. O CLI do Prisma fica em dependências de desenvolvimento e é necessário no comando de migration.
-4. Em **Environment**, configure `NODE_VERSION` como `22.12.0`, `DATABASE_URL` com a **Internal Database URL** do PostgreSQL, `NODE_ENV` como `production` e `CORS_ORIGIN` inicialmente como a origem do frontend (por exemplo, `https://seu-projeto.vercel.app`). Não defina `PORT`: o Render fornece essa variável.
-5. Faça o deploy. A URL pública do serviço será a origem da API, por exemplo `https://sua-api.onrender.com` (sem `/api/v1`).
-
-Use o endereço interno do PostgreSQL para o serviço Render na mesma região. O Render executa as migrations no comando de inicialização antes de iniciar a API.
-
-### 3.5 Publicar o frontend na Vercel
-
-1. Importe o mesmo repositório na Vercel e defina `frontend` como **Root Directory**.
-2. Mantenha o build `npm run build` e a saída `dist`, declarados em `frontend/vercel.json`. O arquivo também define `npm ci` e o fallback de rotas da SPA.
-3. Em **Environment Variables**, defina `VITE_API_URL` como a origem pública da API Render, sem `/api/v1`, por exemplo `https://sua-api.onrender.com`.
-4. Faça o deploy. A URL exibida pela Vercel (por exemplo, `https://seu-projeto.vercel.app`) é a URL do frontend.
-5. Volte às variáveis do serviço Render e defina `CORS_ORIGIN` exatamente como a origem do frontend publicada, sem barra final. Salve e faça novo deploy do backend. Se mudar `VITE_API_URL`, publique o frontend novamente, pois Vite incorpora essa variável no build.
-
-Em planos gratuitos, o serviço web pode entrar em suspensão após inatividade. O PostgreSQL gratuito do Render expira 30 dias após a criação, tem limite de 1 GB e não oferece backups. Para manter os dados por mais tempo, escolha um plano de banco pago ou configure uma rotina de backup antes de publicar. Consulte as [limitações atuais dos planos gratuitos do Render](https://render.com/docs/free).
-
-### 3.6 Testes, lint e formatação
+### 3.4 Testes, lint e formatação
 
 Execute os comandos abaixo dentro de cada pasta. Testes e verificações terminam sem modo de observação e não alteram os arquivos:
 
@@ -175,11 +153,11 @@ docker-compose.yaml         PostgreSQL local (banco senai_db)
 - Valores monetários são persistidos com duas casas decimais no PostgreSQL e os cálculos de mercado são arredondados para duas casas; o valor de mercado tem piso de 1 moeda.
 - O banco local inicia vazio. Dados de demonstração não são inseridos automaticamente.
 - O limite de elenco, regras de fidelidade, taxas, multas, desempates e critérios de duelo seguem as regras implementadas para o enunciado. A API é a fonte dos valores calculados.
-- `start:dev` atende o desenvolvimento local; `start:prod` usa a porta `PORT` e escuta em `0.0.0.0`, como esperado em produção. A publicação em Render ou Vercel exige configurar os serviços e variáveis da própria conta.
+- `start:dev` atende o desenvolvimento local; `start:prod` usa a porta `PORT` e escuta em `0.0.0.0`.
 
 ## 7. Funcionalidades não implementadas
 
-A revisão do código e os testes disponíveis não apontaram funcionalidade obrigatória pendente. Entre os diferenciais, testes, lint e formatação passam no backend e no frontend; o backend também oferece OpenAPI/Swagger e logs de requisição. O Compose atual sobe somente o banco, não a aplicação completa em um comando. Há regras CSS responsivas, mas a utilização em 375 px ainda precisa de conferência visual antes da entrega. A publicação em Render ou Vercel depende da configuração das contas e dos serviços externos.
+A revisão do código e os testes disponíveis não apontaram funcionalidade obrigatória pendente. Entre os diferenciais, testes, lint e formatação passam no backend e no frontend; o backend também oferece OpenAPI/Swagger e logs de requisição. O Compose atual sobe somente o banco, não a aplicação completa em um comando. Há regras CSS responsivas, mas a utilização em 375 px ainda precisa de conferência visual antes da entrega.
 
 ## 8. Uso de inteligência artificial
 
