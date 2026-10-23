@@ -2,6 +2,12 @@
 
 Aplicação web full stack para gerenciar uma liga fictícia de futebol. Permite cadastrar e filtrar jogadores, organizar clubes e escalações, comprar e vender atletas com contratos, consultar o histórico financeiro, jogar partidas e ver a classificação. A API aplica as regras de negócio e persiste os dados em PostgreSQL; o frontend consome a API.
 
+## Aplicação publicada
+
+- **Frontend:** [football-league-chi.vercel.app](https://football-league-chi.vercel.app/)
+- **Backend (API):** [football-league-o3yl.onrender.com](https://football-league-o3yl.onrender.com)
+- **Documentação Swagger:** [football-league-o3yl.onrender.com/docs](https://football-league-o3yl.onrender.com/docs)
+
 ## 1. Pré-requisitos
 
 O procedimento abaixo foi preparado para **Ubuntu 24.04 LTS**. Instale antes:
